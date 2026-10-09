@@ -4,7 +4,7 @@ Nothing below is done for you: each step is yours to run. Order matters.
 
 ## 1. Backend (gasysteme)
 1. Run the migrations **on staging first**, then production, in this order (each is one transaction, safe to re-run):
-   `sql/migrations/029_agent_node.sql`, `030_agent_chat.sql`, `031_agent_roles_paths.sql`.
+   `sql/migrations/029_agent_node.sql`, `030_agent_chat.sql`, `031_agent_roles_paths.sql`, `032_agent_schedules.sql` (schedules; the backend logs an error every 30 s without it).
 2. Environment (Coolify): `NODE_API_KEY` (install key, 32+ chars), `GITHUB_TOKEN_NODE` (read access to
    `zicgab/Gab-ai-node`), `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (see `docs/github-setup.md`).
 3. Deploy manually on Coolify. The agent API is only reachable over Tailscale.

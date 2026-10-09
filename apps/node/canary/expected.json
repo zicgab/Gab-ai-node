@@ -1,0 +1,10 @@
+{
+  "problems": [
+    { "id": "pagination-off-by-one", "type": "bug", "file": "backend/orders.js", "keywords": ["offset", "page", "off-by-one", "off by one", "first page", "skips"] },
+    { "id": "sql-injection", "type": "bug", "file": "backend/orders.js", "keywords": ["injection", "sql", "customer", "interpolat", "parameter"] },
+    { "id": "insert-not-awaited", "type": "bug", "file": "backend/orders.js", "keywords": ["await", "insert", "order.id", "undefined"] },
+    { "id": "client-reads-wrong-field", "type": "contract", "file": "web/api.ts", "keywords": ["orderId", "body.id", "field", "mismatch"] },
+    { "id": "docs-csv-export-missing", "type": "docs", "file": "docs/how-to.md", "keywords": ["csv", "export"] },
+    { "id": "docs-search-not-documented", "type": "docs", "file": "docs/how-to.md", "keywords": ["search", "customer"] }
+  ]
+}

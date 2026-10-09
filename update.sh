@@ -60,6 +60,13 @@ main() {
   install_command "$root"
   start_service
   echo "updated to ${sha:0:7}; the node runs again"
+  # Optional: the canary review shows the node and its model still work after the update.
+  if [ -t 1 ] && [ -r /dev/tty ]; then
+    case $(ask "Run the canary check now (gab-node eval, a few minutes)? [y/N]") in
+      y | Y | yes) node "$root/apps/node/dist/cli.js" eval || warn "canary check failed (see above)" ;;
+      *) echo "skipped (later: gab-node eval)" ;;
+    esac
+  fi
 }
 
 main "$@"

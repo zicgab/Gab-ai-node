@@ -9,7 +9,8 @@
 //   gab-node run                               the service (launchd / systemd / Task Scheduler)
 //   gab-node pause | resume                    stop/start taking new tasks on this machine
 //   gab-node status
-//   gab-node models list | pull <id...> | verify <id> | remove <id>
+//   gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id> | detect
+//   gab-node eval [--model <id>] [--runs <n>]  review the bundled canary repo and score the model
 import { readFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -23,6 +24,7 @@ import { loadConfig, NodeConfig, saveConfig } from './config.js';
 import { log } from './log.js';
 import { managedHost, modelsCommand } from './models/commands.js';
 import { createHealthCheck } from './health.js';
+import { evalCommand } from './eval.js';
 import { NodeAgent } from './loop.js';
 import { dataDir, configFile, pauseFile } from './paths.js';
 import { createRunners, DOCKER_KINDS } from './runners.js';
@@ -128,6 +130,7 @@ async function main(): Promise<void> {
     case 'set-secret': return setSecret(rest);
     case 'run': return run();
     case 'models': return modelsCommand(rest);
+    case 'eval': return evalCommand(rest);
     case 'pause':
       await mkdir(dataDir(), { recursive: true });
       await writeFile(pauseFile(), new Date().toISOString());
@@ -143,7 +146,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      throw new Error('commands: register, retire, fetch, set-secret, run, pause, resume, status, models');
+      throw new Error('commands: register, retire, fetch, set-secret, run, pause, resume, status, models, eval');
   }
 }
 

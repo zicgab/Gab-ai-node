@@ -72,3 +72,14 @@ describe('models manage', () => {
     expect(modelRows(c, [ollama], [])[0]!.inNode).toBe(false);
   });
 });
+
+describe('ollama install plan', () => {
+  const only = (...names: string[]) => async (n: string) => names.includes(n);
+  it('uses the package manager of the system, or says to do it by hand', async () => {
+    const { ollamaInstallPlan } = await import('../src/models/detect.js');
+    expect(await ollamaInstallPlan('darwin', only('brew'))).toMatchObject({ command: 'brew', args: ['install', '--cask', 'ollama'] });
+    expect(await ollamaInstallPlan('win32', only('winget'))).toMatchObject({ command: 'winget' });
+    expect(await ollamaInstallPlan('linux', only('curl'))).toMatchObject({ command: 'sh' });
+    expect(await ollamaInstallPlan('darwin', only())).toBeNull();
+  });
+});

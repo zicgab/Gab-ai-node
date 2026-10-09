@@ -94,6 +94,36 @@ export async function startOllama(fetchFn: typeof fetch = fetch, waitMs = 30_000
   return false;
 }
 
+/** True when Ollama is installed (the program, or the macOS app), running or not. */
+export async function ollamaInstalled(): Promise<boolean> {
+  return (await has('ollama')) || (process.platform === 'darwin' && (await exists('/Applications/Ollama.app')));
+}
+
+/** How Ollama is installed here: only through the system's own package manager or Ollama's own installer. null: do it by hand. */
+export async function ollamaInstallPlan(platform = process.platform, tools: (name: string) => Promise<boolean> = has): Promise<{ command: string; args: string[]; note: string } | null> {
+  if (platform === 'darwin' && (await tools('brew'))) return { command: 'brew', args: ['install', '--cask', 'ollama'], note: 'Homebrew cask "ollama"' };
+  if (platform === 'win32' && (await tools('winget'))) return { command: 'winget', args: ['install', '--id', 'Ollama.Ollama', '-e', '--accept-package-agreements', '--accept-source-agreements'], note: 'winget package Ollama.Ollama' };
+  if (platform === 'linux' && (await tools('curl'))) return { command: 'sh', args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], note: "Ollama's official install script (asks for sudo)" };
+  return null;
+}
+
+/** Installs Ollama with the plan above, showing its output. False when it cannot or failed. */
+export async function installOllama(): Promise<boolean> {
+  const plan = await ollamaInstallPlan();
+  if (!plan) {
+    console.log('Install Ollama by hand: https://ollama.com/download , then run "gab-node models detect".');
+    return false;
+  }
+  console.log(`Installing Ollama: ${plan.note}...`);
+  const ok = await new Promise<boolean>((resolve) => {
+    const child = spawn(plan.command, plan.args, { stdio: 'inherit', windowsHide: true });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+  if (!ok) console.log('The Ollama install failed (see above). Install it by hand: https://ollama.com/download');
+  return ok;
+}
+
 /** One tiny request with a tool: does the model answer with a tool call? (Loading a big model can take a minute.) */
 export async function toolSmokeTest(endpoint: string, model: string, fetchFn: typeof fetch = fetch): Promise<{ ok: boolean; detail: string }> {
   try {
@@ -223,7 +253,7 @@ export function suggestRoles(models: { id: string; memoryMb: number }[], budgetM
 }
 
 /**
- * detect: list (and start Ollama when it is installed but stopped, on a terminal after asking; --start: without asking).
+ * detect: list; installs Ollama when missing (asks once on a terminal; --install: without asking) and starts it when stopped.
  * detect --use <number> [model ids...] [--add]: apply without prompts (--add keeps the models of the current server). On a terminal with no --use: asks.
  */
 export async function detectCommand(args: string[]): Promise<void> {
@@ -234,12 +264,16 @@ export async function detectCommand(args: string[]): Promise<void> {
     let servers = await probeServers();
     const folders = (await Promise.all(modelFolders().map(async (f) => ((await exists(f.dir)) ? f : null)))).filter((f) => f !== null);
 
-    if (!servers.some((s) => s.kind === 'ollama') && folders.some((f) => f.tool === 'Ollama')) {
-      const go = args.includes('--start') || (tty && !/^n/i.test(await ask('Ollama is installed but not running. Start it now? [Y/n] ')));
-      if (go) {
+    if (!servers.some((s) => s.kind === 'ollama')) {
+      // Ollama is the node's model engine: install it when missing (asks once), start it when stopped (no question).
+      let installed = await ollamaInstalled() || folders.some((f) => f.tool === 'Ollama');
+      if (!installed && (args.includes('--install') || (tty && !/^n/i.test(await ask('Ollama (runs the AI models) is not installed. Install it now? [Y/n] '))))) {
+        installed = (await installOllama()) && (await ollamaInstalled());
+      }
+      if (installed) {
         console.log('Starting Ollama...');
         if (await startOllama()) servers = await probeServers();
-        else console.log('Ollama did not start (is it installed? try the app or "ollama serve" yourself).');
+        else console.log('Ollama did not start (try the Ollama app, or "ollama serve" yourself).');
       }
     }
 

@@ -14,7 +14,7 @@ export const CLAIM_WAIT_SECONDS = 25;
 /** A task is retried after a lost lease or retryable failure at most this many times. */
 export const MAX_ATTEMPTS = 3;
 
-export const TaskKind = z.enum(['ask', 'bug_hunt', 'fix_finding', 'test_web', 'test_mobile', 'translate', 'custom', 'eval', 'chat', 'scan', 'contract_check', 'test_electron']);
+export const TaskKind = z.enum(['ask', 'bug_hunt', 'fix_finding', 'test_web', 'test_mobile', 'translate', 'custom', 'eval', 'chat', 'scan', 'contract_check', 'test_electron', 'docs_check']);
 export type TaskKind = z.infer<typeof TaskKind>;
 /** Kinds that run commands (tests, builds) in the node's sandbox: the repo must allow running. */
 export const RUN_KINDS: readonly TaskKind[] = ['bug_hunt', 'fix_finding', 'test_web', 'test_electron', 'test_mobile', 'scan', 'custom', 'eval'];

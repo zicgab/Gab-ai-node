@@ -1,5 +1,6 @@
 import { ChatRunner } from './agent/chat-runner.js';
 import { ContractRunner } from './agent/contract-runner.js';
+import { DocsRunner } from './agent/docs-runner.js';
 import { MobileRunner } from './agent/mobile-runner.js';
 import { AgentRunner } from './agent/runner.js';
 import { ScanRunner } from './agent/scan-runner.js';
@@ -12,7 +13,7 @@ import type { TaskRunner } from './runner.js';
 
 /** Installed task runners. Kinds that run commands need Docker (never run on the host). */
 export async function createRunners(config: Pick<NodeConfig, 'mobile'>): Promise<TaskRunner[]> {
-  const runners: TaskRunner[] = [new AgentRunner(), new ChatRunner(), new ContractRunner()];
+  const runners: TaskRunner[] = [new AgentRunner(), new ChatRunner(), new ContractRunner(), new DocsRunner()];
   if (await has('docker')) runners.push(new WorkRunner(), new WebRunner(), new ScanRunner());
   else log.warn('docker not found: bug_hunt, fix_finding, custom, test_web and scan are disabled on this node');
   if (config.mobile.enabled) {

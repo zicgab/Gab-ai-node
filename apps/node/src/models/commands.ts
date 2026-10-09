@@ -1,4 +1,4 @@
-// gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear>
+// gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect
 import { rm } from 'node:fs/promises';
 import { loadConfig, saveConfig, type NodeConfig } from '../config.js';
 import { Role, TaskKind } from '@gab-ai-node/protocol';
@@ -6,10 +6,12 @@ import { has } from '../exec.js';
 import { modelsDir } from '../paths.js';
 import { CATALOG, catalogEntry } from './catalog.js';
 import { downloadModel, isInstalled, modelPath, verifyModel } from './download.js';
+import { detectCommand } from './detect.js';
 import { LlamaServerHost, type HostedModel } from './server.js';
 
 export async function modelsCommand(args: string[]): Promise<void> {
   const [sub, ...ids] = args;
+  if (sub === 'detect') return detectCommand(ids);
   const config = await loadConfig();
   const dir = modelsDir();
   switch (sub) {
@@ -75,7 +77,7 @@ export async function modelsCommand(args: string[]): Promise<void> {
       return;
     }
     default:
-      throw new Error('usage: gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear>');
+      throw new Error('usage: gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect');
   }
 }
 

@@ -73,7 +73,11 @@ if (-not $NoService) {
 Step "gab-node command"
 Install-Command $root
 
+Step "Models already on this machine"
+try { & node $cli models detect; if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" } }
+catch { Write-Host "model detection failed (not fatal): run 'gab-node models detect' later: $_" -ForegroundColor Yellow }
+
 Write-Host "`nDone. Next:" -ForegroundColor Green
 Write-Host "  1. The node is paused: allow it from MCP (set_node_availability), e.g. with a nightly window."
-Write-Host "  2. Models: gab-node models pull <id>   (see ARCHITECTURE.md)"
+Write-Host "  2. Models: gab-node models detect (use ones you run already) or gab-node models pull <id>   (see ARCHITECTURE.md)"
 Write-Host "  3. Logs: $(Join-Path (Get-DataDir) 'logs')   Status: gab-node status"

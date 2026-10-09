@@ -91,8 +91,10 @@ main() {
   step "Models already on this machine"
   "${cli[@]}" models detect || echo "model detection failed (not fatal): run 'gab-node models detect' later"
 
+  "${cli[@]}" status || true
+
   printf '\n\033[32mDone. Next:\033[0m\n'
-  echo "  1. The node is paused: allow it from MCP (set_node_availability), e.g. with a nightly window."
+  echo "  1. The node is paused: on purpose. Allow it from Claude Code (MCP): set_node_availability node=<this node's name> (always, or a nightly window)."
   echo "  2. Models: gab-node models detect (use ones you run already) or gab-node models pull <id>   (see ARCHITECTURE.md)"
   echo "  3. Logs: $(data_dir)/logs   Status: gab-node status"
 }

@@ -2,19 +2,22 @@
 // by asking localhost, which works the same on macOS, Windows and Linux, and lets you point the
 // node at one ("external" mode: one endpoint serves every model of the node). It also reports
 // model folders of tools that are installed but not running, so you know what to start.
+import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { loadConfig, saveConfig, type NodeConfig } from '../config.js';
+import { exec, has } from '../exec.js';
 import { addModel } from './commands.js';
 
 export interface DetectedServer {
   kind: 'ollama' | 'lmstudio' | 'llama.cpp' | 'openai-compatible';
   /** OpenAI-compatible base URL, always on this machine. */
   endpoint: string;
-  models: { id: string; sizeBytes: number | null }[];
+  /** tools: the model can call tools (agent tasks need it); null when the server does not say. */
+  models: { id: string; sizeBytes: number | null; tools: boolean | null }[];
 }
 
 const PROBES = [
@@ -25,11 +28,13 @@ const PROBES = [
 ];
 
 const OllamaTags = z.object({ models: z.array(z.object({ name: z.string().min(1), size: z.number().nonnegative().optional() })) });
+const OllamaShow = z.object({ capabilities: z.array(z.string()).optional() });
 const OpenAIModels = z.object({ data: z.array(z.object({ id: z.string().min(1) })) });
 
-async function getJson(fetchFn: typeof fetch, url: string): Promise<unknown | null> {
+async function getJson(fetchFn: typeof fetch, url: string, body?: unknown): Promise<unknown | null> {
   try {
-    const res = await fetchFn(url, { signal: AbortSignal.timeout(1_500) });
+    const res = await fetchFn(url, body === undefined ? { signal: AbortSignal.timeout(1_500) }
+      : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5_000) });
     return res.ok ? await res.json() : null;
   } catch { return null; } // nothing listening there: not an error
 }
@@ -38,22 +43,79 @@ export async function probeServers(fetchFn: typeof fetch = fetch): Promise<Detec
   const found = await Promise.all(PROBES.map(async (p): Promise<DetectedServer | null> => {
     if (p.kind === 'ollama') {
       const tags = OllamaTags.safeParse(await getJson(fetchFn, `${p.base}/api/tags`));
-      if (tags.success) return { kind: p.kind, endpoint: `${p.base}/v1`, models: tags.data.models.map((m) => ({ id: m.name, sizeBytes: m.size ?? null })) };
+      if (tags.success) {
+        // Ollama says per model whether it can call tools (older versions do not: null).
+        const models = await Promise.all(tags.data.models.map(async (m) => {
+          const show = OllamaShow.safeParse(await getJson(fetchFn, `${p.base}/api/show`, { model: m.name }));
+          const caps = show.success ? show.data.capabilities : undefined;
+          return { id: m.name, sizeBytes: m.size ?? null, tools: caps ? caps.includes('tools') : null };
+        }));
+        return { kind: p.kind, endpoint: `${p.base}/v1`, models };
+      }
     }
     const list = OpenAIModels.safeParse(await getJson(fetchFn, `${p.base}/v1/models`));
-    return list.success && p.kind !== 'ollama' ? { kind: p.kind, endpoint: `${p.base}/v1`, models: list.data.data.map((m) => ({ id: m.id, sizeBytes: null })) } : null;
+    return list.success && p.kind !== 'ollama' ? { kind: p.kind, endpoint: `${p.base}/v1`, models: list.data.data.map((m) => ({ id: m.id, sizeBytes: null, tools: null })) } : null;
   }));
   return found.filter((s): s is DetectedServer => s !== null);
 }
 
 /** Model folders of well-known tools, per OS (the server may just not be running). */
-export function modelFolders(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): { tool: string; dir: string }[] {
+export function modelFolders(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): { tool: string; dir: string; hint: string }[] {
   return [
-    { tool: 'Ollama', dir: env.OLLAMA_MODELS || path.join(home, '.ollama', 'models') },
-    { tool: 'LM Studio', dir: path.join(home, '.lmstudio', 'models') },
-    { tool: 'LM Studio (older)', dir: path.join(home, '.cache', 'lm-studio', 'models') },
-    { tool: 'Hugging Face', dir: path.join(env.HF_HOME || path.join(home, '.cache', 'huggingface'), 'hub') },
+    { tool: 'Ollama', dir: env.OLLAMA_MODELS || path.join(home, '.ollama', 'models'), hint: 'start Ollama (the app, or "ollama serve"), then run: gab-node models detect' },
+    { tool: 'LM Studio', dir: path.join(home, '.lmstudio', 'models'), hint: 'open LM Studio and start its local server (Developer tab), then run: gab-node models detect' },
+    { tool: 'LM Studio (older)', dir: path.join(home, '.cache', 'lm-studio', 'models'), hint: 'open LM Studio and start its local server, then run: gab-node models detect' },
+    { tool: 'Hugging Face', dir: path.join(env.HF_HOME || path.join(home, '.cache', 'huggingface'), 'hub'), hint: 'these files need a server (llama.cpp llama-server, MLX or vLLM) that you run yourself; not used automatically' },
   ];
+}
+
+/**
+ * Starts Ollama when it is installed but not running: the app on macOS (it keeps itself running),
+ * else "ollama serve" in the background. Waits until it answers. Returns whether it is up.
+ */
+export async function startOllama(fetchFn: typeof fetch = fetch, waitMs = 30_000, platform = process.platform): Promise<boolean> {
+  const up = async () => (await getJson(fetchFn, 'http://127.0.0.1:11434/api/tags')) !== null;
+  if (await up()) return true;
+  let started = false;
+  if (platform === 'darwin') started = (await exec('open', ['-a', 'Ollama'])).code === 0;
+  if (!started && (await has('ollama'))) {
+    const child = spawn('ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', () => {}); // reported below as "did not answer"
+    child.unref();
+    started = true;
+  }
+  if (!started) return false;
+  for (const end = Date.now() + waitMs; Date.now() < end; await new Promise((r) => setTimeout(r, 1_000))) {
+    if (await up()) return true;
+  }
+  return false;
+}
+
+/** One tiny request with a tool: does the model answer with a tool call? (Loading a big model can take a minute.) */
+export async function toolSmokeTest(endpoint: string, model: string, fetchFn: typeof fetch = fetch): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const res = await fetchFn(`${endpoint}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(180_000),
+      body: JSON.stringify({
+        model, temperature: 0, max_tokens: 200,
+        messages: [{ role: 'user', content: 'Call the tool get_time with zone "UTC". Do not answer in text.' }],
+        tools: [{ type: 'function', function: { name: 'get_time', description: 'Current time in a zone', parameters: { type: 'object', properties: { zone: { type: 'string' } }, required: ['zone'] } } }],
+      }),
+    });
+    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    const body = z.object({ choices: z.array(z.object({ message: z.object({ tool_calls: z.array(z.object({ function: z.object({ name: z.string() }) })).nullish() }) })).min(1) }).safeParse(await res.json());
+    if (!body.success) return { ok: false, detail: 'unexpected response' };
+    const called = body.data.choices[0]!.message.tool_calls?.some((c) => c.function.name === 'get_time') ?? false;
+    return called ? { ok: true, detail: 'called the tool' } : { ok: false, detail: 'answered without calling the tool' };
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message };
+  }
+}
+
+/** Models to propose: the ones known to call tools; if the server does not say, all of them. */
+export function suggestedModels(server: DetectedServer): string[] {
+  const capable = server.models.filter((m) => m.tools === true).map((m) => m.id);
+  return capable.length ? capable : server.models.filter((m) => m.tools !== false).map((m) => m.id);
 }
 
 async function exists(dir: string): Promise<boolean> { return access(dir).then(() => true, () => false); }
@@ -79,41 +141,63 @@ export function useServer(config: NodeConfig, server: DetectedServer, ids: strin
   for (const m of chosen) addModel(config, m.id, estimateMemoryMb(m.sizeBytes));
 }
 
-/** detect: list. detect --use <number> [model ids...]: apply without prompts. On a terminal with no flags: asks. */
+/**
+ * detect: list (and start Ollama when it is installed but stopped, on a terminal after asking; --start: without asking).
+ * detect --use <number> [model ids...]: apply without prompts. On a terminal with no --use: asks.
+ */
 export async function detectCommand(args: string[]): Promise<void> {
-  const servers = await probeServers();
-  const folders = (await Promise.all(modelFolders().map(async (f) => ((await exists(f.dir)) ? f : null)))).filter((f) => f !== null);
-  if (servers.length === 0) {
-    console.log('No running model server found (looked for Ollama :11434, LM Studio :1234, llama.cpp :8080, vLLM :8000).');
-    for (const f of folders) console.log(`Found ${f.tool} files at ${f.dir}: start that tool (its server must be running), then run: gab-node models detect`);
-    if (folders.length === 0) console.log('Nothing installed that I know of: use "gab-node models pull <id>" to download a model.');
-    return;
-  }
-  servers.forEach((s, i) => console.log(`${i + 1}. ${s.kind} at ${s.endpoint}\n${s.models.map((m) => `     ${m.id}${m.sizeBytes ? ` (${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB)` : ''}`).join('\n') || '     (no models loaded)'}`));
-  if (servers.length > 1) console.log('A node uses ONE server: pick the one to use.');
+  const tty = process.stdin.isTTY === true;
+  const rl = tty ? createInterface({ input: process.stdin, output: process.stdout }) : null;
+  try {
+    const ask = async (q: string): Promise<string> => (rl ? (await rl.question(q)).trim() : '');
+    let servers = await probeServers();
+    const folders = (await Promise.all(modelFolders().map(async (f) => ((await exists(f.dir)) ? f : null)))).filter((f) => f !== null);
 
-  let pick: number; let ids: string[];
-  const useAt = args.indexOf('--use');
-  if (useAt >= 0) {
-    pick = Number(args[useAt + 1]) - 1;
-    ids = args.slice(useAt + 2);
-  } else if (process.stdin.isTTY) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const a = (await rl.question(`Use which server? [1-${servers.length}, Enter to skip] `)).trim();
-      if (!a) { console.log('Skipped. Run "gab-node models detect" any time.'); return; }
-      pick = Number(a) - 1;
-      const s = servers[pick];
-      const all = (await rl.question(`Models to use (space separated) [${s?.models.map((m) => m.id).join(' ') ?? ''}] `)).trim();
-      ids = all ? all.split(/\s+/) : (s?.models.map((m) => m.id) ?? []);
-    } finally { rl.close(); }
-  } else return; // not a terminal and no --use: listing is all we do
-  const server = servers[pick];
-  if (!server) throw new Error(`no server number ${pick + 1}`);
-  if (ids.length === 0) ids = server.models.map((m) => m.id);
-  const config = await loadConfig();
-  useServer(config, server, ids);
-  await saveConfig(config);
-  console.log(`Using ${server.kind} at ${server.endpoint}: ${config.models.map((m) => m.id).join(', ')} (default ${config.defaultModel}).`);
-  console.log('Memory per model is an estimate (file size + 20%); a wrong estimate only affects how many models load at once.');
+    if (!servers.some((s) => s.kind === 'ollama') && folders.some((f) => f.tool === 'Ollama')) {
+      const go = args.includes('--start') || (tty && !/^n/i.test(await ask('Ollama is installed but not running. Start it now? [Y/n] ')));
+      if (go) {
+        console.log('Starting Ollama...');
+        if (await startOllama()) servers = await probeServers();
+        else console.log('Ollama did not start (is it installed? try the app or "ollama serve" yourself).');
+      }
+    }
+
+    if (servers.length === 0) {
+      console.log('No running model server found (looked for Ollama :11434, LM Studio :1234, llama.cpp :8080, vLLM :8000).');
+      for (const f of folders) console.log(`Found ${f.tool} files at ${f.dir}: ${f.hint}`);
+      if (folders.length === 0) console.log('Nothing installed that I know of: use "gab-node models pull <id>" to download a model.');
+      return;
+    }
+    const mark = (t: boolean | null) => (t === true ? ' [tools]' : t === false ? ' [no tools: not for agent tasks]' : '');
+    servers.forEach((s, i) => console.log(`${i + 1}. ${s.kind} at ${s.endpoint}\n${s.models.map((m) => `     ${m.id}${m.sizeBytes ? ` (${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB)` : ''}${mark(m.tools)}`).join('\n') || '     (no models)'}`));
+    if (servers.length > 1) console.log('A node uses ONE server: pick the one to use.');
+
+    let pick: number; let ids: string[];
+    const useAt = args.indexOf('--use');
+    if (useAt >= 0) {
+      pick = Number(args[useAt + 1]) - 1;
+      ids = args.slice(useAt + 2).filter((a) => !a.startsWith('--'));
+      if (ids.length === 0 && servers[pick]) ids = suggestedModels(servers[pick]!);
+    } else if (tty) {
+      const a = await ask(`Use which server? [${servers.length === 1 ? '1' : `1-${servers.length}`}, Enter = 1, "skip" to skip] `);
+      if (/^s/i.test(a)) { console.log('Skipped. Run "gab-node models detect" any time.'); return; }
+      pick = a ? Number(a) - 1 : 0;
+      const proposed = servers[pick] ? suggestedModels(servers[pick]!) : [];
+      const typed = await ask(`Models to use (space separated) [${proposed.join(' ')}] `);
+      ids = typed ? typed.split(/\s+/) : proposed;
+    } else return; // not a terminal and no --use: listing is all we do
+    const server = servers[pick];
+    if (!server) throw new Error(`no server number ${pick + 1}`);
+    if (ids.length === 0) throw new Error(`no model to use on ${server.kind}: pull one first (e.g. "ollama pull qwen2.5-coder:14b")`);
+    const config = await loadConfig();
+    useServer(config, server, ids);
+    await saveConfig(config);
+    console.log(`Using ${server.kind} at ${server.endpoint}: ${config.models.map((m) => m.id).join(', ')} (default ${config.defaultModel}).`);
+    console.log('Memory per model is an estimate (file size + 20%); a wrong estimate only affects how many models load at once.');
+
+    const model = config.defaultModel!;
+    console.log(`Checking that ${model} can call tools (loading it can take a minute)...`);
+    const smoke = await toolSmokeTest(server.endpoint, model);
+    console.log(smoke.ok ? `${model}: OK, ${smoke.detail}.` : `${model}: WARNING, ${smoke.detail}. Agent tasks need tool calls: pick another model (gab-node models detect) or set a per-role model (gab-node models use).`);
+  } finally { rl?.close(); }
 }

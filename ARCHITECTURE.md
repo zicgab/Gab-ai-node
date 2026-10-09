@@ -135,7 +135,7 @@ evidence (they become findings, with `seen_count`). It never changes the repo an
   address that is not `http://localhost`. Network is used only for `setup:` and `npm install playwright`.
 - The model drives the page only through fixed actions (`goto`, `elements`, `text`, `click`, `fill`,
   `press`, `wait`, `problems`) implemented by `apps/node/assets/web-driver.mjs`; it never writes browser code.
-- Image `config.sandbox.webImage` (default `mcr.microsoft.com/playwright:v1.48.2-jammy`) must match
+- Image `config.sandbox.webImage` (default `mcr.microsoft.com/playwright:v1.48.2-jammy`, pinned by digest in `IMAGES`, apps/node/src/config.ts) must match
   `PLAYWRIGHT_VERSION` in `agent/web-runner.ts`.
 - Pick a model for it: `gab-node models use test_web <model-id>`.
 

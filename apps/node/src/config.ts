@@ -5,6 +5,25 @@ import { z } from 'zod';
 import { Backend, ModelInfo, NodeName, RepoName, Role, TaskKind } from '@gab-ai-node/protocol';
 import { configFile } from './paths.js';
 
+/**
+ * Images pinned to a digest (tag kept for reading): a re-pushed tag cannot change what runs.
+ * Bump them together with a test run (gab-node eval, and one scan / test_web task).
+ */
+export const IMAGES = {
+  sandbox: 'node:20-bookworm@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5',
+  semgrep: 'semgrep/semgrep:1.180.0@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3',
+  gitleaks: 'ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f',
+  web: 'mcr.microsoft.com/playwright:v1.48.2-jammy@sha256:96dc479be9a603227fafc7126bd7d5e8152ae3e63749f377b2c49a4314b28ae1',
+} as const;
+
+/** Old unpinned defaults saved in existing config files: replaced by the pinned ones when loading. */
+const LEGACY_IMAGES: Record<string, string> = {
+  'node:20-bookworm': IMAGES.sandbox,
+  'semgrep/semgrep:latest': IMAGES.semgrep,
+  'ghcr.io/gitleaks/gitleaks:latest': IMAGES.gitleaks,
+  'mcr.microsoft.com/playwright:v1.48.2-jammy': IMAGES.web,
+};
+
 export const NodeConfig = z.object({
   coordinatorUrl: z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) URL'),
   name: NodeName,
@@ -31,14 +50,14 @@ export const NodeConfig = z.object({
   }).default({}),
   /** Docker sandbox for commands (bug_hunt, fix_finding, tests). AGENT.md "image:" overrides the image. */
   sandbox: z.object({
-    image: z.string().min(1).default('node:20-bookworm'),
-    /** Images of the scan task's scanners. Official images; pin them to a digest (name@sha256:...) for production. */
+    image: z.string().min(1).default(IMAGES.sandbox),
+    /** Images of the scan task's scanners (pinned by default; see IMAGES). */
     scannerImages: z.object({
-      semgrep: z.string().min(1).default('semgrep/semgrep:latest'),
-      gitleaks: z.string().min(1).default('ghcr.io/gitleaks/gitleaks:latest'),
+      semgrep: z.string().min(1).default(IMAGES.semgrep),
+      gitleaks: z.string().min(1).default(IMAGES.gitleaks),
     }).default({}),
     /** Image of test_web tasks: Chromium and its system libraries (the Playwright version in agent/web-runner.ts must match its tag). */
-    webImage: z.string().min(1).default('mcr.microsoft.com/playwright:v1.48.2-jammy'),
+    webImage: z.string().min(1).default(IMAGES.web),
     memoryMb: z.number().int().min(512).default(8192),
     cpus: z.number().positive().max(64).default(4),
     cmdTimeoutMinutes: z.number().int().min(1).max(120).default(15),
@@ -76,11 +95,23 @@ export async function loadConfig(file = configFile()): Promise<NodeConfig> {
   let raw: string;
   try { raw = await readFile(file, 'utf8'); }
   catch { throw new Error(`no config at ${file}: run "gab-node register" first`); }
-  const parsed = NodeConfig.safeParse(JSON.parse(raw));
+  const parsed = NodeConfig.safeParse(upgradeImages(JSON.parse(raw)));
   if (!parsed.success) {
     throw new Error(`invalid ${file}: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
   }
   return parsed.data;
+}
+
+/** Swaps old unpinned default images in a saved config for the pinned ones (images you chose yourself are kept). */
+export function upgradeImages(raw: unknown): unknown {
+  const sb = (raw as { sandbox?: Record<string, unknown> } | null)?.sandbox;
+  if (!sb || typeof sb !== 'object') return raw;
+  const swap = (v: unknown) => (typeof v === 'string' && LEGACY_IMAGES[v]) || v;
+  sb.image = swap(sb.image);
+  sb.webImage = swap(sb.webImage);
+  const sc = sb.scannerImages as Record<string, unknown> | undefined;
+  if (sc && typeof sc === 'object') { sc.semgrep = swap(sc.semgrep); sc.gitleaks = swap(sc.gitleaks); }
+  return raw;
 }
 
 /** Writes through a temp file then renames, so a crash never leaves half a config. */

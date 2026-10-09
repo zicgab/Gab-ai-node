@@ -1,0 +1,27 @@
+# Build and test on every push and pull request. Nodes install whatever main (or AGENT_NODE_REF)
+# points to, so main must always build and pass.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm test
+      - name: Shell scripts parse
+        run: for f in *.sh; do bash -n "$f"; done

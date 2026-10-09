@@ -23,7 +23,7 @@ it from MCP (`set_node_availability`).
 
 Stopped halfway: `bash setup.sh` / `.\setup.ps1` in that folder (safe to re-run).
 
-Going live for the first time: follow [docs/go-live.md](docs/go-live.md). What each kind of job does: [ARCHITECTURE.md](ARCHITECTURE.md).
+Going live for the first time: follow [docs/go-live.md](docs/go-live.md). Rotating keys and tokens: [docs/key-rotation.md](docs/key-rotation.md). Checking a node and its model: `gab-node eval`. What each kind of job does: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Day to day
 

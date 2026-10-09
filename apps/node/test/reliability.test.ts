@@ -134,3 +134,14 @@ describe('NodeAgent claims only what it can run', () => {
     expect(claims.length - before).toBeLessThanOrEqual(1); // at most the claim already in flight
   });
 });
+
+describe('pinned images', () => {
+  it('defaults are pinned by digest and old unpinned defaults in saved configs are upgraded; own choices are kept', async () => {
+    const { IMAGES, NodeConfig, upgradeImages } = await import('../src/config.js');
+    for (const image of Object.values(IMAGES)) expect(image).toMatch(/@sha256:[0-9a-f]{64}$/);
+    const c = NodeConfig.parse(upgradeImages({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node', sandbox: { image: 'node:20-bookworm', webImage: 'my/web:1', scannerImages: { semgrep: 'semgrep/semgrep:latest' } } }));
+    expect(c.sandbox.image).toBe(IMAGES.sandbox);
+    expect(c.sandbox.webImage).toBe('my/web:1');
+    expect(c.sandbox.scannerImages).toEqual({ semgrep: IMAGES.semgrep, gitleaks: IMAGES.gitleaks });
+  });
+});

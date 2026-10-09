@@ -23,19 +23,18 @@ describe('allowedKinds', () => {
     expect(r.reason).toMatch(/Docker/);
   });
   it('claims nothing without a model server or with a full disk', () => {
-    expect(allowedKinds(kinds, { docker: true, model: false, freeDiskMb: 50_000 }, docker, 10_240)).toMatchObject({ kinds: [], reason: 'model server not reachable' });
+    expect(allowedKinds(kinds, { docker: true, model: false, freeDiskMb: 50_000 }, docker, 10_240)).toMatchObject({ kinds: [], reason: expect.stringMatching(/llama-server is not installed/) });
     expect(allowedKinds(kinds, { docker: true, model: true, freeDiskMb: 500 }, docker, 10_240).kinds).toEqual([]);
   });
 });
 
 describe('modelServerUp', () => {
-  const cfg = { modelEndpoint: 'http://127.0.0.1:1/v1', modelServer: { mode: 'external' as const, binary: 'llama-server', basePort: 8180, idleMinutes: 10 } };
-  it('asks /models of an external server', async () => {
-    const seen: string[] = [];
-    const ok = (async (u: string) => { seen.push(u); return new Response('{}'); }) as unknown as typeof fetch;
-    expect(await modelServerUp(cfg, ok)).toBe(true);
-    expect(seen).toEqual(['http://127.0.0.1:1/v1/models']);
-    expect(await modelServerUp(cfg, (() => Promise.reject(new Error('refused'))) as typeof fetch)).toBe(false);
+  it('is up when the llama-server binary is there, down when it is not', async () => {
+    const dir = await tmp('gab-llama-');
+    const bin = path.join(dir, 'llama-server');
+    expect(await modelServerUp(bin)).toBe(false);
+    await writeFile(bin, '#!/bin/sh\n');
+    expect(await modelServerUp(bin)).toBe(true);
   });
 });
 

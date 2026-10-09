@@ -3,20 +3,19 @@
 // almost full: nothing at all. Without this, tasks are claimed, fail and burn their retries.
 // Also nothing while the machine is on battery (unless allowed) or busy above the CPU/memory limits,
 // so the node never piles work on a computer that is already loaded. A running task is not slowed.
-import { readdir, readFile, statfs } from 'node:fs/promises';
+import { access, readdir, readFile, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { TaskKind } from '@gab-ai-node/protocol';
 import type { NodeConfig } from './config.js';
-import { exec, has } from './exec.js';
+import { exec } from './exec.js';
 import { log } from './log.js';
+import { llamaServerBin } from './paths.js';
 
 export interface HealthState {
   docker: boolean;
-  /** The default model server answers (managed mode: llama-server is installed). */
+  /** llama-server is installed (the node starts it per model, on demand). */
   model: boolean;
-  /** Models whose own server (config.modelEndpoints) does not answer: not claimed for now. */
-  modelsDown?: string[];
   /** Free space where repos and worktrees live, in MB (null: unknown). */
   freeDiskMb: number | null;
   /** The computer runs on battery now (null: no battery, or unknown). */
@@ -30,7 +29,7 @@ export interface Limits { runOnBattery: boolean; maxCpuPercent: number; maxMemor
 
 /** Kinds this node may claim now, and why the others are held back (for the log). */
 export function allowedKinds(kinds: TaskKind[], state: HealthState, dockerKinds: ReadonlySet<TaskKind>, minFreeDiskMb: number, limits?: Limits): { kinds: TaskKind[]; reason: string | null } {
-  if (!state.model) return { kinds: [], reason: 'model server not reachable' };
+  if (!state.model) return { kinds: [], reason: 'llama-server is not installed (run update.sh / update.ps1)' };
   if (state.freeDiskMb !== null && state.freeDiskMb < minFreeDiskMb) return { kinds: [], reason: `only ${state.freeDiskMb} MB free disk (minimum ${minFreeDiskMb})` };
   if (limits) {
     if (state.onBattery && !limits.runOnBattery) return { kinds: [], reason: 'running on battery (allow with "gab-node settings battery on")' };
@@ -46,24 +45,9 @@ export async function dockerRunning(): Promise<boolean> {
   return (await exec('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 15_000 })).code === 0;
 }
 
-async function answers(endpoint: string, fetchFn: typeof fetch): Promise<boolean> {
-  try {
-    const res = await fetchFn(`${endpoint.replace(/\/$/, '')}/models`, { signal: AbortSignal.timeout(5_000) });
-    return res.ok;
-  } catch { return false; }
-}
-
-export async function modelServerUp(config: Pick<NodeConfig, 'modelEndpoint' | 'modelServer'>, fetchFn: typeof fetch = fetch): Promise<boolean> {
-  // Managed mode starts llama-server per task: it is enough that the program is there.
-  if (config.modelServer.mode === 'managed') return has(config.modelServer.binary);
-  return answers(config.modelEndpoint, fetchFn);
-}
-
-/** Models served by an extra server that does not answer now. */
-export async function modelsDown(config: Pick<NodeConfig, 'modelEndpoints'>, fetchFn: typeof fetch = fetch): Promise<string[]> {
-  const endpoints = [...new Set(Object.values(config.modelEndpoints))];
-  const down = new Set((await Promise.all(endpoints.map(async (e) => ((await answers(e, fetchFn)) ? null : e)))).filter((e): e is string => e !== null));
-  return Object.entries(config.modelEndpoints).filter(([, e]) => down.has(e)).map(([id]) => id);
+/** The node starts llama-server per task: it is enough that the installed program is there. */
+export async function modelServerUp(binary: string = llamaServerBin()): Promise<boolean> {
+  try { await access(binary); return true; } catch { return false; }
 }
 
 export async function freeDiskMb(dir: string): Promise<number | null> {
@@ -157,12 +141,12 @@ export function createHealthCheck(config: NodeConfig, dir: string, ttlMs = 30_00
   let last = '';
   return async () => {
     if (cached && Date.now() - cached.at < ttlMs) return cached.state;
-    const [docker, model, disk, down, battery, cpu, mem] = await Promise.all([dockerRunning(), modelServerUp(config), freeDiskMb(dir), modelsDown(config), onBattery(), cpuPercent(), memoryPercent()]);
-    const state: HealthState = { docker, model, freeDiskMb: disk, modelsDown: down, onBattery: battery, cpuPercent: cpu, memoryPercent: mem };
+    const [docker, model, disk, battery, cpu, mem] = await Promise.all([dockerRunning(), modelServerUp(), freeDiskMb(dir), onBattery(), cpuPercent(), memoryPercent()]);
+    const state: HealthState = { docker, model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem };
     const busy = (cpu ?? 0) > config.maxCpuPercent || (mem ?? 0) > config.maxMemoryPercent;
-    const key = `${docker}|${model}|${disk !== null && disk < config.minFreeDiskMb}|${down.join(',')}|${battery}|${busy}`;
+    const key = `${docker}|${model}|${disk !== null && disk < config.minFreeDiskMb}|${battery}|${busy}`;
     if (key !== last) {
-      (docker && model && down.length === 0 && !busy ? log.info : log.warn)('health', { docker, modelServer: model, freeDiskMb: disk, endpoint: config.modelEndpoint, modelsDown: down, onBattery: battery, cpuPercent: cpu, memoryPercent: mem });
+      (docker && model && !busy ? log.info : log.warn)('health', { docker, modelServer: model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem });
       last = key;
     }
     cached = { at: Date.now(), state };

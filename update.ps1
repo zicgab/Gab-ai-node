@@ -53,9 +53,12 @@ try {
     try {
       Invoke-Checked "npm.cmd" @("ci", "--no-audit", "--no-fund")
       Invoke-Checked "npm.cmd" @("run", "build")
+      # The new code's node-lib.ps1 (the one loaded above is the old one) also brings the pinned llama-server up to date.
+      . (Join-Path $root "node-lib.ps1")
+      Install-LlamaServer $root
     } finally { Pop-Location }
   } catch {
-    Write-Host "The new code did not install or build: putting the old code back" -ForegroundColor Yellow
+    Write-Host "The new code did not install, build or get its llama-server: putting the old code back" -ForegroundColor Yellow
     Set-Location (Split-Path $root -Parent)
     Remove-Item -Recurse -Force $root
     Rename-Item -Path $old -NewName (Split-Path $root -Leaf)

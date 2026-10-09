@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NodeConfig } from '../src/config.js';
 import { allowedKinds, linuxOnBattery, parsePmset, parseVmStat } from '../src/health.js';
-import { addToNode, modelRows, removeFromNode } from '../src/models/manage.js';
 import { applySetting } from '../src/settings.js';
 
 const config = () => NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node' });
@@ -42,44 +41,5 @@ describe('machine protection', () => {
     expect(() => applySetting(c, 'max-memory', '5')).toThrow(/10 to 100/);
     expect(() => applySetting(c, 'battery', 'yes')).toThrow(/on\|off/);
     expect(() => applySetting(c, 'nope', '1')).toThrow();
-  });
-});
-
-describe('models manage', () => {
-  const ollama = { kind: 'ollama' as const, endpoint: 'http://127.0.0.1:11434/v1', models: [{ id: 'qwen3-coder:30b', sizeBytes: 18e9, tools: true }, { id: 'gpt-oss:120b', sizeBytes: 65e9, tools: true }] };
-  const lms = { kind: 'lmstudio' as const, endpoint: 'http://127.0.0.1:1234/v1', models: [{ id: 'qwen2.5-vl', sizeBytes: null, tools: true, vision: true }] };
-
-  it('adds models one by one, shows what each is used for, removes them from the node', () => {
-    const c = config();
-    addToNode(c, ollama, 'qwen3-coder:30b');
-    addToNode(c, ollama, 'gpt-oss:120b');
-    addToNode(c, lms, 'qwen2.5-vl');
-    c.roleModels.security = 'gpt-oss:120b';
-    expect(c.defaultModel).toBe('qwen3-coder:30b');
-    expect(c.modelEndpoints).toEqual({ 'qwen2.5-vl': lms.endpoint });
-    const rows = modelRows(c, [ollama, lms], ['gpt-oss:120b']);
-    expect(rows.map((r) => [r.id, r.inNode, r.uses, r.pulledByNode])).toEqual([
-      ['qwen3-coder:30b', true, ['default'], false],
-      ['gpt-oss:120b', true, ['security'], true],
-      ['qwen2.5-vl', true, [], false],
-    ]);
-    removeFromNode(c, 'qwen3-coder:30b');
-    removeFromNode(c, 'qwen2.5-vl');
-    expect(c.models.map((m) => m.id)).toEqual(['gpt-oss:120b']);
-    expect(c.defaultModel).toBe('gpt-oss:120b');
-    expect(c.modelEndpoints).toEqual({});
-    expect(c.visionModels).toEqual([]);
-    expect(modelRows(c, [ollama], [])[0]!.inNode).toBe(false);
-  });
-});
-
-describe('ollama install plan', () => {
-  const only = (...names: string[]) => async (n: string) => names.includes(n);
-  it('uses the package manager of the system, or says to do it by hand', async () => {
-    const { ollamaInstallPlan } = await import('../src/models/detect.js');
-    expect(await ollamaInstallPlan('darwin', only('brew'))).toMatchObject({ command: 'brew', args: ['install', '--cask', 'ollama'] });
-    expect(await ollamaInstallPlan('win32', only('winget'))).toMatchObject({ command: 'winget' });
-    expect(await ollamaInstallPlan('linux', only('curl'))).toMatchObject({ command: 'sh' });
-    expect(await ollamaInstallPlan('darwin', only())).toBeNull();
   });
 });

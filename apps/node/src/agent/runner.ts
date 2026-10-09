@@ -8,6 +8,7 @@ import type { TaskContext, TaskRunner } from '../runner.js';
 import { CodeIndex } from './code-index.js';
 import { repoInstructions } from './context.js';
 import { runAgent } from './loop.js';
+import { CATALOG } from '../models/catalog.js';
 import { modelFor } from '../models/pick.js';
 import { checkScope, withRole } from './roles.js';
 import { createTools } from './tools.js';
@@ -56,7 +57,7 @@ export class AgentRunner implements TaskRunner {
 export async function defaultBackend(ctx: TaskContext): Promise<ModelBackend> {
   const { task, config } = ctx;
   if (task.backend !== 'local') throw new Error(`backend ${task.backend} is not available on this node yet`);
-  const model = modelFor(task, config);
-  if (!model) throw new Error('no model given and no defaultModel configured on this node');
+  const model = modelFor(task, config.models.map((m) => m.id));
+  if (!model) throw new Error(task.model ? `${task.model} is not a model this node knows (known: ${CATALOG.map((e) => e.id).join(', ')})` : 'no model installed on this node: gab-node models pull --all');
   return new OpenAICompatibleBackend(await ctx.modelEndpoint(model), model);
 }

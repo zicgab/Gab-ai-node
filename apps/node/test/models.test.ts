@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CATALOG, downloadUrl, type CatalogEntry } from '../src/models/catalog.js';
-import { downloadModel, isInstalled, modelPath, verifyModel } from '../src/models/download.js';
+import { downloadModel, isInstalled, mmprojPath, modelPath, verifyModel } from '../src/models/download.js';
 import { LlamaServerHost, type HostedModel } from '../src/models/server.js';
 import { RetryableError } from '../src/runner.js';
 
@@ -97,6 +97,37 @@ describe('downloadModel', () => {
   });
 });
 
+describe('a vision model (model + mmproj)', () => {
+  const proj = randomBytes(50_000);
+  const vision: CatalogEntry = { ...entry, id: 'vl', file: 'vl.gguf', mmproj: { file: 'proj.gguf', sha256: createHash('sha256').update(proj).digest('hex'), sizeBytes: proj.length } };
+  const urls: string[] = [];
+  const fetchImpl = (async (u: string) => { urls.push(u); return new Response(u.endsWith('proj.gguf') ? proj : body, { status: 200 }); }) as unknown as typeof fetch;
+
+  it('downloads both files from the pinned revision, and is installed only with both', async () => {
+    const dir = await tmp();
+    expect(await downloadModel(dir, vision, { fetchImpl })).toBe('downloaded');
+    expect(urls.map((u) => u.split('/').pop())).toEqual(['vl.gguf', 'proj.gguf']);
+    expect(urls.every((u) => u.includes(`/resolve/${vision.revision}/`))).toBe(true);
+    expect(await isInstalled(dir, vision)).toBe(true);
+    expect(mmprojPath(dir, vision)).toBe(path.join(dir, 'proj.gguf'));
+    expect(await downloadModel(dir, vision, { fetchImpl })).toBe('already-installed');
+    await rm(path.join(dir, 'proj.gguf'));
+    expect(await isInstalled(dir, vision)).toBe(false);
+  });
+
+  it('verifyModel fails when the projector is corrupted, and removes it', async () => {
+    const dir = await tmp();
+    await downloadModel(dir, vision, { fetchImpl });
+    await writeFile(path.join(dir, 'proj.gguf'), Buffer.alloc(proj.length));
+    expect(await verifyModel(dir, vision)).toBe(false);
+    expect(await isInstalled(dir, vision)).toBe(false);
+  });
+
+  it('a model without a projector has none', () => {
+    expect(mmprojPath('/m', entry)).toBeUndefined();
+  });
+});
+
 // Fake llama-server: answers /health and /v1/chat/completions; FAKE_CRASH exits at once.
 const FAKE = `
 const http = require('node:http');
@@ -107,7 +138,7 @@ if (a[a.indexOf('--model') + 1].includes('crash')) { console.error('failed to lo
 http.createServer((req, res) => {
   if (req.url === '/health') return res.end('{"status":"ok"}');
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ choices: [{ message: { content: 'hi from ' + alias } }] }));
+  res.end(JSON.stringify({ choices: [{ message: { content: 'hi from ' + alias } }], mmproj: a.includes('--mmproj') ? a[a.indexOf('--mmproj') + 1] : null }));
 }).listen(port, '127.0.0.1');
 `;
 
@@ -131,6 +162,17 @@ describe('LlamaServerHost', () => {
       const again = await h.acquire('fast', signal());
       expect(again.endpoint).toBe(a.endpoint);
       a.release(); again.release();
+    } finally { await h.stop(); }
+  });
+
+  it('passes the projector of a vision model as --mmproj, and nothing for the others', async () => {
+    const h = host([{ ...model('vision', 30), mmprojFile: '/models/proj.gguf' }, model('text', 30)]);
+    try {
+      const v = await h.acquire('vision', signal());
+      expect(((await (await fetch(`${v.endpoint}/chat/completions`, { method: 'POST', body: '{}' })).json()) as { mmproj: string | null }).mmproj).toBe('/models/proj.gguf');
+      const t = await h.acquire('text', signal());
+      expect(((await (await fetch(`${t.endpoint}/chat/completions`, { method: 'POST', body: '{}' })).json()) as { mmproj: string | null }).mmproj).toBeNull();
+      v.release(); t.release();
     } finally { await h.stop(); }
   });
 

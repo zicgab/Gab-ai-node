@@ -14,9 +14,6 @@ import { OpenAICompatibleBackend } from '../src/backends/openai-compatible.js';
 import type { ChatMessage, ChatResponse, ModelBackend } from '../src/backends/types.js';
 import { NodeConfig } from '../src/config.js';
 import { exec } from '../src/exec.js';
-import { modelsDown } from '../src/health.js';
-import { addServer, useServer } from '../src/models/detect.js';
-import { ExternalModelHost } from '../src/models/server.js';
 import type { TaskContext } from '../src/runner.js';
 
 const config = (extra: Record<string, unknown> = {}) => NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node', ...extra });
@@ -97,30 +94,6 @@ describe('screenshots for vision models', () => {
       await new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'look', images: ['data:image/jpeg;base64,AAA'] }], [], new AbortController().signal);
       expect((s.bodies[0]!.messages as unknown[])[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAA' } }] });
     } finally { s.close(); }
-  });
-});
-
-describe('several model servers on one node', () => {
-  const ollama = { kind: 'ollama' as const, endpoint: 'http://127.0.0.1:11434/v1', models: [{ id: 'qwen3-coder:30b', sizeBytes: null, tools: true, vision: false }] };
-  const lms = { kind: 'lmstudio' as const, endpoint: 'http://127.0.0.1:1234/v1', models: [{ id: 'qwen2.5-vl', sizeBytes: null, tools: true, vision: true }] };
-  it('adds a second server next to the first; each model goes to its own server', async () => {
-    const c = config();
-    useServer(c, ollama, ['qwen3-coder:30b']);
-    addServer(c, lms, ['qwen2.5-vl']);
-    expect(c.models.map((m) => m.id)).toEqual(['qwen3-coder:30b', 'qwen2.5-vl']);
-    expect(c.modelEndpoint).toBe(ollama.endpoint);
-    expect(c.modelEndpoints).toEqual({ 'qwen2.5-vl': lms.endpoint });
-    expect(c.visionModels).toEqual(['qwen2.5-vl']);
-    const host = new ExternalModelHost(c.modelEndpoint, c.modelEndpoints);
-    expect((await host.acquire('qwen2.5-vl')).endpoint).toBe(lms.endpoint);
-    expect((await host.acquire('qwen3-coder:30b')).endpoint).toBe(ollama.endpoint);
-    useServer(c, ollama, ['qwen3-coder:30b']);
-    expect(c.modelEndpoints).toEqual({});
-  });
-
-  it('reports the models of a server that does not answer', async () => {
-    const f = (async (u: string) => (u.startsWith('http://127.0.0.1:1234') ? Promise.reject(new Error('refused')) : new Response('{}'))) as unknown as typeof fetch;
-    expect(await modelsDown({ modelEndpoints: { a: 'http://127.0.0.1:1234/v1', b: 'http://127.0.0.1:9999/v1' } }, f)).toEqual(['a']);
   });
 });
 

@@ -1,0 +1,18 @@
+# The llama.cpp release (llama-server) the node runs, pinned by SHA-256.
+# Read by node-lib.sh and node-lib.ps1 (setup and update download it into
+# <data folder>/llama.cpp/bin and refuse a file whose hash differs).
+# Format: "tag <release tag>", then "asset <variant> <file name> <sha256>".
+# To bump: pick a tag at https://github.com/ggml-org/llama.cpp/releases, copy each
+# file's sha256 from `gh api repos/ggml-org/llama.cpp/releases/tags/<tag> --jq '.assets[] | "\(.name) \(.digest)"'`.
+# Vulkan builds are used on Linux and Windows when a Vulkan driver is present (NVIDIA, AMD, Intel);
+# CUDA builds need extra runtime files and are not used.
+tag b11535
+asset macos-arm64 llama-b11535-bin-macos-arm64.tar.gz 69437c84cc39e7bef5fbee2a8c3e9efdb4b3f9ba0bd889d6fdce0350c5dca58d
+asset macos-x64 llama-b11535-bin-macos-x64.tar.gz 05deb3490fa7c436636bd296f6f143be0cf75a859b70ce50b17f8cbfb869eaf1
+asset linux-x64 llama-b11535-bin-ubuntu-x64.tar.gz 47d25c3a6a9ddfa364f75c02e04f9b2f1ce7676f79bb3c073860bad9168e5057
+asset linux-x64-vulkan llama-b11535-bin-ubuntu-vulkan-x64.tar.gz ec9990a7c7e232858f8612567d30a5eeb29e3e2870aad933758c5e13480de35c
+asset linux-arm64 llama-b11535-bin-ubuntu-arm64.tar.gz 18b8f1442fb78ecad9e55c4a201ecadac131889cf25a954008989e80ae308c23
+asset linux-arm64-vulkan llama-b11535-bin-ubuntu-vulkan-arm64.tar.gz e50ccdc305bfb3a12dbd46b9f332d6216f4e1a4b7c986bd7f65e648cb81ea14a
+asset win-x64 llama-b11535-bin-win-cpu-x64.zip 9a30e789aaf35ab0ceb86b4bbbd8c74c1681638303cfc27557a901c242c51026
+asset win-x64-vulkan llama-b11535-bin-win-vulkan-x64.zip 30f30bb96683c5a6d2140ce5d67e45015539fa403d65037fe6e8415b14e5c51d
+asset win-arm64 llama-b11535-bin-win-cpu-arm64.zip 750bfb90c0f5bf620e8f9d56daf8abf73f7eb3bc3f872c9bd11fa25955d8c3ff

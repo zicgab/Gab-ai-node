@@ -6,7 +6,7 @@
 #   bash update.sh [--force]
 #
 # Stops the node (running tasks are handed back to the queue), swaps in the new
-# code, installs the packages and builds. If that fails the old code is put
+# code, installs the packages, builds and installs the llama-server the new code pins. If that fails the old code is put
 # back and the node is started again. The data folder (config, models, repos)
 # is outside the code folder and is never touched.
 
@@ -48,8 +48,9 @@ main() {
   mv "$root" "$old"
   mv "$inner" "$root"
   echo "$sha" > "$root/.version"
-  if ! (cd "$root" && npm ci --no-audit --no-fund && npm run build); then
-    warn "the new code did not install or build: putting the old code back"
+  # The new code's node-lib.sh (the one sourced above is the old one) also brings the pinned llama-server up to date.
+  if ! (cd "$root" && npm ci --no-audit --no-fund && npm run build && . "$root/node-lib.sh" && ensure_llama_server "$root"); then
+    warn "the new code did not install, build or get its llama-server: putting the old code back"
     rm -rf "$root"
     mv "$old" "$root"
     start_service

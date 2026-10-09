@@ -9,6 +9,8 @@ import { RetryableError } from '../runner.js';
 export interface HostedModel {
   id: string;
   file: string;
+  /** Multimodal projector (vision models): passed as --mmproj. */
+  mmprojFile?: string;
   memoryMb: number;
   contextSize: number;
   serverArgs: string[];
@@ -20,12 +22,11 @@ export interface ModelHost {
   stop(): Promise<void>;
 }
 
-/** Servers I run myself (config.modelEndpoint, or modelEndpoints for some models); nothing to start. */
-export class ExternalModelHost implements ModelHost {
-  constructor(private readonly endpoint: string, private readonly perModel: Record<string, string> = {}) {}
-  async acquire(model: string) { return { endpoint: this.perModel[model] ?? this.endpoint, release: () => {} }; }
-  async stop() {}
-}
+/** For a node without a model server (tests, or only used for other backends): any local model request fails. */
+export const noModelHost: ModelHost = {
+  async acquire(model) { throw new Error(`no model server on this node: cannot serve ${model}`); },
+  async stop() {},
+};
 
 interface Loaded {
   model: HostedModel;
@@ -80,7 +81,7 @@ export class LlamaServerHost implements ModelHost {
     const port = this.o.basePort + this.o.models.indexOf(model);
     const [program, ...prefix] = this.o.command;
     const args = [...prefix, '--model', model.file, '--host', '127.0.0.1', '--port', String(port),
-      '--ctx-size', String(model.contextSize), '--n-gpu-layers', '999', '--jinja', '--alias', model.id, ...model.serverArgs];
+      '--ctx-size', String(model.contextSize), '--n-gpu-layers', '999', '--jinja', '--alias', model.id, ...(model.mmprojFile ? ['--mmproj', model.mmprojFile] : []), ...model.serverArgs];
     log.info('starting model server', { model: model.id, port });
     const proc = spawn(program!, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const l: Loaded = { model, port, proc, users: 0, idleTimer: null, stderrTail: [], exited: false, ready: Promise.resolve() };

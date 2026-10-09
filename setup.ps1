@@ -7,6 +7,8 @@
 # 1. Tools: Node.js 20+, npm, git must be installed (setup never installs
 #    software). Docker is checked: commands of bug hunts and tests run in it.
 # 2. Packages and build (npm ci, npm run build).
+#    Then llama-server, the node's only model engine: the release pinned in
+#    llama-server.pin is downloaded into the data folder and SHA-256 checked.
 # 3. Registration: this machine registers as an agent node with the node key
 #    (backend NODE_API_KEY, used once and never saved: install.ps1 hands it
 #    over in -NodeKey). The node's own token is encrypted with DPAPI for this
@@ -39,6 +41,9 @@ try {
   Invoke-Checked "npm.cmd" @("ci", "--no-audit", "--no-fund")
   Invoke-Checked "npm.cmd" @("run", "build")
 } finally { Pop-Location }
+
+Step "Model server (llama-server)"
+Install-LlamaServer $root
 
 Step "Registration"
 $registered = $false

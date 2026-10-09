@@ -16,3 +16,5 @@ export const pauseFile = () => path.join(dataDir(), 'paused');
 export const reposDir = () => path.join(dataDir(), 'repos');
 export const workDir = () => path.join(dataDir(), 'work');
 export const modelsDir = () => path.join(dataDir(), 'models');
+/** The pinned llama-server the installer puts here (node-lib.sh / node-lib.ps1, llama-server.pin). */
+export const llamaServerBin = () => path.join(dataDir(), 'llama.cpp', 'bin', process.platform === 'win32' ? 'llama-server.exe' : 'llama-server');

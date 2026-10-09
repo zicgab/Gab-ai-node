@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { Backend, ModelInfo, NodeName, RepoName, Role, TaskKind } from '@gab-ai-node/protocol';
+import { log } from './log.js';
+import { CATALOG } from './models/catalog.js';
 import { configFile } from './paths.js';
 
 /**
@@ -29,26 +31,11 @@ export const NodeConfig = z.object({
   name: NodeName,
   /** Models this node can serve, with the memory each needs loaded. */
   models: z.array(ModelInfo).default([]),
-  /** Default model when a task does not ask for one. */
-  defaultModel: z.string().nullable().default(null),
   /**
-   * Model per role (frontend, backend, security, uxui) or per task kind (ask, custom, ...), for tasks that do not name
-   * one. A role wins over a kind. Set with "gab-node models use <role|kind> <model-id>".
-   */
-  roleModels: z.record(z.enum([...Role.options, ...TaskKind.options]), z.string().min(1)).default({}),
-  /** Models that can see images (screenshots in test_web / test_electron); set by "gab-node models detect". */
-  visionModels: z.array(z.string().min(1)).default([]),
-  /** Models served by another local server than modelEndpoint (e.g. LM Studio next to Ollama): model id -> endpoint. */
-  modelEndpoints: z.record(z.string().min(1), z.string().url()).default({}),
-  /** OpenAI-compatible endpoint of the local model server (llama-server), localhost only. */
-  modelEndpoint: z.string().url().default('http://127.0.0.1:8080/v1'),
-  /**
-   * external: I run the model server myself at modelEndpoint.
-   * managed: the node starts llama-server per model on demand (models from "gab-node models pull").
+   * The node starts llama-server itself, one process per model, on demand (see models/server.ts); the binary is the one
+   * the installer puts in the data folder (llamaServerBin). Which model serves which task is fixed in models/catalog.ts.
    */
   modelServer: z.object({
-    mode: z.enum(['external', 'managed']).default('external'),
-    binary: z.string().min(1).default('llama-server'),
     basePort: z.number().int().min(1024).max(65000).default(8180),
     idleMinutes: z.number().int().min(1).max(24 * 60).default(10),
   }).default({}),
@@ -100,15 +87,31 @@ export const NodeConfig = z.object({
 });
 export type NodeConfig = z.infer<typeof NodeConfig>;
 
+/** Settings of earlier versions (external model servers, per-node model choice); ignored when found in an old config. */
+const REMOVED_KEYS = ['defaultModel', 'roleModels', 'visionModels', 'modelEndpoint', 'modelEndpoints'];
+
 export async function loadConfig(file = configFile()): Promise<NodeConfig> {
   let raw: string;
   try { raw = await readFile(file, 'utf8'); }
   catch { throw new Error(`no config at ${file}: run "gab-node register" first`); }
-  const parsed = NodeConfig.safeParse(upgradeImages(JSON.parse(raw)));
+  const json = JSON.parse(raw) as Record<string, unknown>;
+  const ms = (json.modelServer ?? {}) as Record<string, unknown>;
+  const removed = [...REMOVED_KEYS.filter((k) => k in json), ...['mode', 'binary'].filter((k) => k in ms).map((k) => `modelServer.${k}`)];
+  // Gone from the file at the next save of the config.
+  if (removed.length) log.warn('config.json has settings the node no longer uses (llama-server is the only model engine and the model for each task is fixed): ignored', { settings: removed });
+  const parsed = NodeConfig.safeParse(upgradeImages(json));
   if (!parsed.success) {
     throw new Error(`invalid ${file}: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
   }
-  return parsed.data;
+  return dropUnknownModels(parsed.data);
+}
+
+/** Models of earlier versions (Ollama / LM Studio names) are not in the catalog: the node does not know them, so they are dropped with a warning. */
+export function dropUnknownModels(config: NodeConfig): NodeConfig {
+  const unknown = config.models.filter((m) => m.backend === 'local' && !CATALOG.some((e) => e.id === m.id));
+  if (unknown.length === 0) return config;
+  log.warn('config.json lists models this node does not know: ignored (the models of this node are fixed, install them with: gab-node models pull --all)', { models: unknown.map((m) => m.id), known: CATALOG.map((e) => e.id) });
+  return { ...config, models: config.models.filter((m) => !unknown.includes(m)) };
 }
 
 /** Swaps old unpinned default images in a saved config for the pinned ones (images you chose yourself are kept). */

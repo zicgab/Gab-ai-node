@@ -9,6 +9,8 @@
 #    Linux: asks you to install it; setup never installs software with sudo). Docker is checked:
 #    commands of bug hunts and tests run in it.
 # 2. Packages and build (npm ci, npm run build).
+#    Then llama-server, the node's only model engine: the release pinned in
+#    llama-server.pin is downloaded into the data folder, SHA-256 checked, no sudo.
 # 3. Registration: this machine registers as an agent node with the node key
 #    (backend NODE_API_KEY, used once and never saved: install.sh hands it over
 #    in GAB_NODE_KEY). The node's own token goes to the OS secret store (macOS
@@ -54,6 +56,9 @@ main() {
 
   step "Packages and build"
   (cd "$root" && npm ci --no-audit --no-fund && npm run build)
+
+  step "Model server (llama-server)"
+  ensure_llama_server "$root"
 
   step "Registration"
   local cli=(node "$root/apps/node/dist/cli.js")

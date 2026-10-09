@@ -56,6 +56,68 @@ ensure_tools() {
   command -v git > /dev/null || die "git is needed"
 }
 
+# The pinned llama-server (llama-server.pin) goes to <data folder>/llama.cpp/bin, the path
+# apps/node/src/config.ts expects. A `.version` file there holds "<tag> <sha256>" of what is installed.
+llama_dir() { printf '%s' "$(data_dir)/llama.cpp"; }
+
+sha256_of() {
+  if command -v shasum > /dev/null; then shasum -a 256 "$1" | cut -d' ' -f1
+  elif command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1
+  else die "shasum or sha256sum is needed to check the download"
+  fi
+}
+
+# llama_variant: the pin's variant for this machine. Vulkan builds when a Vulkan loader is present.
+llama_variant() {
+  local arch vulkan=""
+  arch=$(uname -m)
+  case "$(uname -s)-$arch" in
+    Darwin-arm64) echo macos-arm64; return ;;
+    Darwin-x86_64) echo macos-x64; return ;;
+  esac
+  if command -v ldconfig > /dev/null && ldconfig -p 2> /dev/null | grep -q 'libvulkan\.so\.1'; then vulkan=-vulkan; fi
+  case $arch in
+    x86_64) echo "linux-x64$vulkan" ;;
+    aarch64 | arm64) echo "linux-arm64$vulkan" ;;
+    *) die "no llama-server build is pinned for $(uname -s) $arch" ;;
+  esac
+}
+
+# ensure_llama_server <root>: installs (or upgrades to) the pinned llama-server, hash-checked, no sudo.
+ensure_llama_server() {
+  local root=$1 pin="$1/llama-server.pin" tag variant file sha base tmp
+  [ -f "$pin" ] || die "$pin is missing"
+  tag=$(awk '$1 == "tag" { print $2 }' "$pin")
+  variant=$(llama_variant)
+  read -r file sha < <(awk -v v="$variant" '$1 == "asset" && $2 == v { print $3, $4 }' "$pin")
+  [ -n "${file:-}" ] && [ -n "${sha:-}" ] && [ -n "$tag" ] || die "llama-server.pin has no build for '$variant'"
+  base=$(llama_dir)
+  if [ "$(cat "$base/bin/.version" 2> /dev/null)" = "$tag $sha" ] && [ -x "$base/bin/llama-server" ]; then
+    echo "llama-server $tag ($variant) already installed"
+    return 0
+  fi
+  command -v curl > /dev/null || die "curl is needed"
+  mkdir -p "$base"
+  tmp=$(mktemp -d "$base/.install.XXXXXX")
+  fail() { rm -rf "$tmp"; die "$1"; }
+  echo "Downloading llama-server $tag ($variant)..."
+  curl -fL --progress-bar --connect-timeout 20 --retry 3 -o "$tmp/pkg.tar.gz" "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$file" \
+    || fail "could not download $file"
+  [ "$(sha256_of "$tmp/pkg.tar.gz")" = "$sha" ] || fail "$file does not match the pinned SHA-256 (llama-server.pin): not installed"
+  mkdir "$tmp/x"
+  tar -xzf "$tmp/pkg.tar.gz" -C "$tmp/x" --strip-components=1 || fail "could not unpack $file"
+  [ -f "$tmp/x/llama-server" ] || fail "$file has no llama-server"
+  chmod +x "$tmp/x/llama-server"
+  # curl does not set the macOS quarantine flag; clear it anyway in case one was added.
+  if is_mac; then xattr -dr com.apple.quarantine "$tmp/x" 2> /dev/null || true; fi
+  echo "$tag $sha" > "$tmp/x/.version"
+  rm -rf "$base/bin"
+  mv "$tmp/x" "$base/bin"
+  rm -rf "$tmp"
+  "$base/bin/llama-server" --version > /dev/null 2>&1 || die "the installed llama-server does not start on this machine ($variant)"
+  echo "llama-server $tag installed in $base/bin"
+}
+
 # install_service <root>: starts run-node.sh at login and after a crash, now.
 install_service() {
   local root=$1 run="$1/run-node.sh"

@@ -11,9 +11,9 @@ import type { NodeConfig } from './config.js';
 import { modelsThatFit } from './fit.js';
 import { allowedKinds, type HealthState } from './health.js';
 import { KeepAwake, pruneMirrors, rotateLogs } from './housekeeping.js';
-import { ExternalModelHost, type ModelHost } from './models/server.js';
+import { noModelHost, type ModelHost } from './models/server.js';
 import { log } from './log.js';
-import { modelFor } from './models/pick.js';
+import { fallbackModel, modelFor } from './models/pick.js';
 import { pauseFile, reposDir, workDir } from './paths.js';
 import { addWorktree, cleanWorkDir, commitAndPush, syncMirror, type Worktree } from './repos.js';
 import { RetryableError, type TaskContext, type TaskRunner } from './runner.js';
@@ -43,7 +43,7 @@ export interface NodeDeps {
   workRoot?: string;
   remoteUrl?: (repo: string) => string;
   isLocallyPaused?: () => boolean;
-  /** Serves models to tasks; default: the external server at config.modelEndpoint. */
+  /** Serves models to tasks (llama-server, one process per model). Without one, tasks that need a local model fail. */
   modelHost?: ModelHost;
   idleMs?: number;
   /** Checked before each claim (default: always healthy, for tests; "gab-node run" passes the real checks). */
@@ -77,7 +77,7 @@ export class NodeAgent {
   private lastHold: string | null = null;
 
   constructor(private readonly d: NodeDeps) {
-    this.modelHost = d.modelHost ?? new ExternalModelHost(d.config.modelEndpoint, d.config.modelEndpoints);
+    this.modelHost = d.modelHost ?? noModelHost;
     this.keepAwake = d.keepAwake ?? new KeepAwake();
   }
 
@@ -151,10 +151,8 @@ export class NodeAgent {
       }
       // Only the kinds that can run right now (Docker up, model server up, disk not full).
       let kinds = this.kinds;
-      let down: string[] = [];
       if (this.d.health) {
         const h = await this.d.health();
-        down = h.modelsDown ?? [];
         const allowed = allowedKinds(kinds, h, this.d.dockerKinds ?? new Set(), config.minFreeDiskMb, config);
         if (allowed.reason !== this.lastHold) {
           if (allowed.reason) log.warn('holding back tasks', { reason: allowed.reason, claiming: allowed.kinds });
@@ -165,10 +163,10 @@ export class NodeAgent {
         if (kinds.length === 0) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
       }
       const runningModels = [...this.running.values()].map((r) => r.model).filter((m): m is string => !!m);
-      // A model whose own server is down is not offered (its tasks would only fail).
-      const fit = modelsThatFit(config.models, runningModels, config.memoryBudgetMb).filter((m) => !down.includes(m));
-      // Tasks without a model use the default one: don't claim if it can't load now.
-      if (config.backends.includes('local') && config.defaultModel && !fit.includes(config.defaultModel)) {
+      const fit = modelsThatFit(config.models, runningModels, config.memoryBudgetMb);
+      // Tasks without a model of their own use the fallback one: don't claim if it can't load now.
+      const fallback = fallbackModel(config.models.map((m) => m.id));
+      if (config.backends.includes('local') && fallback && !fit.includes(fallback)) {
         await sleep(idle, this.stopping.signal);
         continue;
       }
@@ -194,7 +192,7 @@ export class NodeAgent {
   private startTask(task: TaskSpec, leaseId: string, github: GithubToken | null): void {
     const r: Running = {
       task, leaseId, abort: new AbortController(), reason: null, github,
-      model: task.backend === 'local' ? modelFor(task, this.d.config) : null,
+      model: task.backend === 'local' ? modelFor(task, this.d.config.models.map((m) => m.id)) : null,
       events: [], done: Promise.resolve(),
     };
     this.running.set(task.id, r);

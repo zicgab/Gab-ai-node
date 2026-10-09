@@ -1,18 +1,30 @@
-// gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect | manage
-import { rm } from 'node:fs/promises';
+// gab-node models list | pull <id...|--all> | verify <id> | remove <id> | test [id] | manage
+// The node knows only the models of catalog.ts. Which one serves which task is fixed (pick.ts).
+import { access, rm } from 'node:fs/promises';
+import path from 'node:path';
 import { loadConfig, saveConfig, type NodeConfig } from '../config.js';
-import { Role, TaskKind } from '@gab-ai-node/protocol';
-import { has } from '../exec.js';
-import { modelsDir } from '../paths.js';
-import { CATALOG, catalogEntry } from './catalog.js';
-import { downloadModel, isInstalled, modelPath, verifyModel } from './download.js';
-import { detectCommand } from './detect.js';
+import { llamaServerBin, modelsDir } from '../paths.js';
+import { CATALOG, catalogEntry, catalogFiles, totalBytes, type CatalogEntry } from './catalog.js';
+import { downloadModel, isInstalled, mmprojPath, modelPath, verifyModel } from './download.js';
 import { manageCommand } from './manage.js';
+import { fallbackModel } from './pick.js';
 import { LlamaServerHost, type HostedModel } from './server.js';
+import { toolSmokeTest } from './smoke.js';
+
+const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(1);
+
+/** Catalog models this machine can run at all (they fit its memory budget). */
+export const fittingModels = (budgetMb: number): CatalogEntry[] => CATALOG.filter((e) => e.memoryMb <= budgetMb);
+
+/** Ids of the models this node has installed. */
+export const installedIds = (config: Pick<NodeConfig, 'models'>): string[] => config.models.filter((m) => m.backend === 'local').map((m) => m.id);
+
+async function binaryThere(): Promise<boolean> {
+  try { await access(llamaServerBin()); return true; } catch { return false; }
+}
 
 export async function modelsCommand(args: string[]): Promise<void> {
   const [sub, ...ids] = args;
-  if (sub === 'detect') return detectCommand(ids);
   if (sub === 'manage') return manageCommand();
   const config = await loadConfig();
   const dir = modelsDir();
@@ -21,84 +33,88 @@ export async function modelsCommand(args: string[]): Promise<void> {
       for (const e of CATALOG) {
         const installed = await isInstalled(dir, e);
         const fits = e.memoryMb <= config.memoryBudgetMb;
-        console.log(`${installed ? '*' : ' '} ${e.id.padEnd(18)} ${(e.sizeBytes / 1024 ** 3).toFixed(1).padStart(5)} GB download  ${(e.memoryMb / 1024).toFixed(0).padStart(3)} GB memory  ${fits ? '' : '(too big for this machine) '}${e.role}`);
+        console.log(`${installed ? '*' : ' '} ${e.id.padEnd(16)} ${gb(totalBytes(e)).padStart(5)} GB download  ${(e.memoryMb / 1024).toFixed(0).padStart(3)} GB memory  ${fits ? '' : '(too big for this machine) '}${e.role}`);
       }
       console.log(`\n* installed. Memory budget here: ${(config.memoryBudgetMb / 1024).toFixed(0)} GB.`);
-      const used = Object.entries(config.roleModels);
-      console.log(`Default model: ${config.defaultModel ?? 'none'}${used.length ? `; per role/kind: ${used.map(([k, v]) => `${k}=${v}`).join(', ')}` : ''}`);
+      const inUse = installedIds(config);
+      console.log(inUse.length ? `Tasks without an installed model of their own use ${fallbackModel(inUse)}.` : 'No model installed: gab-node models pull --all');
       return;
     }
     case 'pull': {
-      if (ids.length === 0) throw new Error('usage: gab-node models pull <id...>');
-      const entries = ids.map((id) => catalogEntry(id));
+      const entries = ids.includes('--all') ? fittingModels(config.memoryBudgetMb) : ids.map((id) => catalogEntry(id));
+      if (entries.length === 0) throw new Error('usage: gab-node models pull <id...> | --all   (ids: gab-node models list)');
       for (const e of entries) {
         if (e.memoryMb > config.memoryBudgetMb) throw new Error(`${e.id} needs ${e.memoryMb} MB, more than this machine's budget of ${config.memoryBudgetMb} MB`);
       }
       for (const e of entries) {
-        process.stderr.write(`${e.id}: downloading ${e.file}\n`);
+        process.stderr.write(`${e.id}: downloading ${catalogFiles(e).map((f) => f.file).join(' + ')}\n`);
         const outcome = await downloadModel(dir, e, {
-          onProgress: (done, total) => process.stderr.write(`\r${e.id}: ${((done / total) * 100).toFixed(1)}% of ${(total / 1024 ** 3).toFixed(1)} GB`),
+          onProgress: (done, total, file) => process.stderr.write(`\r${e.id}: ${file} ${((done / total) * 100).toFixed(1)}% of ${gb(total)} GB`),
         });
         process.stderr.write(`\n${e.id}: ${outcome === 'downloaded' ? 'downloaded and verified' : 'already installed'}\n`);
         addModel(config, e.id, e.memoryMb);
+        await saveConfig(config);
       }
-      config.modelServer.mode = 'managed';
-      await saveConfig(config);
-      if (!(await has(config.modelServer.binary))) console.log(`Note: ${config.modelServer.binary} not found on PATH; the installer sets it up (or set modelServer.binary in the config).`);
-      console.log(`Models: ${config.models.map((m) => m.id).join(', ')}; default: ${config.defaultModel}`);
+      if (!(await binaryThere())) console.log(`Note: llama-server is not at ${llamaServerBin()}: run setup.sh (setup.ps1) or update.sh (update.ps1), which install it.`);
+      console.log(`Models: ${installedIds(config).join(', ')}`);
       return;
     }
     case 'verify': {
       const e = catalogEntry(ids[0] ?? '');
-      console.log((await verifyModel(dir, e)) ? `${e.id}: OK` : `${e.id}: hash mismatch, file removed (pull it again)`);
+      console.log((await verifyModel(dir, e)) ? `${e.id}: OK` : `${e.id}: hash mismatch or missing file, removed (pull it again)`);
       return;
     }
     case 'remove': {
       const e = catalogEntry(ids[0] ?? '');
-      await rm(modelPath(dir, e), { force: true });
-      await rm(`${modelPath(dir, e)}.verified`, { force: true });
-      config.models = config.models.filter((m) => m.id !== e.id);
-      if (config.defaultModel === e.id) config.defaultModel = config.models[0]?.id ?? null;
-      config.roleModels = Object.fromEntries(Object.entries(config.roleModels).filter(([, id]) => id !== e.id));
+      await removeModel(config, dir, e);
       await saveConfig(config);
       console.log(`${e.id} removed`);
       return;
     }
-    case 'use': {
-      const [key, model] = ids;
-      const valid = [...Role.options, ...TaskKind.options] as string[];
-      if (!key || !model || !valid.includes(key)) throw new Error(`usage: gab-node models use <${valid.join('|')}> <model-id | --clear>`);
-      const slot = key as keyof NodeConfig['roleModels'];
-      if (model === '--clear') delete config.roleModels[slot];
-      else {
-        if (!config.models.some((m) => m.id === model)) throw new Error(`${model} is not installed on this node (installed: ${config.models.map((m) => m.id).join(', ') || 'none'}); gab-node models pull ${model}`);
-        config.roleModels[slot] = model;
-      }
-      await saveConfig(config);
-      console.log(model === '--clear' ? `${key}: back to the default model (${config.defaultModel ?? 'none'})` : `${key} tasks now use ${model} (unless a task names its own model)`);
+    case 'test': {
+      const id = ids[0] ?? fallbackModel(installedIds(config));
+      if (!id) throw new Error('no model installed: gab-node models pull --all');
+      const host = await managedHost(config);
+      try {
+        console.log(`Checking that ${id} can call tools (loading it can take a minute)...`);
+        const { endpoint, release } = await host.acquire(id, new AbortController().signal);
+        try {
+          const smoke = await toolSmokeTest(endpoint, id);
+          console.log(smoke.ok ? `${id}: OK, ${smoke.detail}.` : `${id}: WARNING, ${smoke.detail}. Agent tasks need tool calls.`);
+          if (!smoke.ok) process.exitCode = 1;
+        } finally { release(); }
+      } finally { await host.stop(); }
       return;
     }
     default:
-      throw new Error('usage: gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect');
+      throw new Error('usage: gab-node models list | pull <id...|--all> | verify <id> | remove <id> | test [id] | manage');
   }
+}
+
+/** Deletes the files of a model and forgets it. */
+export async function removeModel(config: NodeConfig, dir: string, e: CatalogEntry): Promise<void> {
+  for (const f of catalogFiles(e)) {
+    const file = path.join(dir, f.file);
+    await Promise.all([file, `${file}.verified`, `${file}.part`].map((p) => rm(p, { force: true })));
+  }
+  config.models = config.models.filter((m) => m.id !== e.id);
 }
 
 export function addModel(config: NodeConfig, id: string, memoryMb: number): void {
   config.models = [...config.models.filter((m) => m.id !== id), { id, memoryMb, backend: 'local' }];
-  config.defaultModel ??= id;
 }
 
-/** Host for "managed" mode: the configured models that are installed and verified. */
+/** The model servers of the installed catalog models (every file installed and verified). */
 export async function managedHost(config: NodeConfig, dir = modelsDir()): Promise<LlamaServerHost> {
   const models: HostedModel[] = [];
   for (const m of config.models.filter((x) => x.backend === 'local')) {
     const e = CATALOG.find((c) => c.id === m.id);
-    if (!e) throw new Error(`model ${m.id} in the config is not in the catalog`);
+    if (!e) throw new Error(`model ${m.id} in the config is not in the catalog (known: ${CATALOG.map((c) => c.id).join(', ')}): gab-node models remove <id>, or edit config.json`);
     if (!(await isInstalled(dir, e))) throw new Error(`model ${m.id} is not installed or not verified: gab-node models pull ${m.id}`);
-    models.push({ id: e.id, file: modelPath(dir, e), memoryMb: e.memoryMb, contextSize: e.contextSize, serverArgs: e.serverArgs });
+    models.push({ id: e.id, file: modelPath(dir, e), mmprojFile: mmprojPath(dir, e), memoryMb: e.memoryMb, contextSize: e.contextSize, serverArgs: e.serverArgs });
   }
   return new LlamaServerHost({
-    command: [config.modelServer.binary], models, budgetMb: config.memoryBudgetMb,
+    command: [llamaServerBin()], models, budgetMb: config.memoryBudgetMb,
     basePort: config.modelServer.basePort, idleMs: config.modelServer.idleMinutes * 60_000,
   });
 }

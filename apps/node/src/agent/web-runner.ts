@@ -17,6 +17,7 @@ import { parseReport, Problem, toFindings } from './findings.js';
 import { runAgent } from './loop.js';
 import { parseRepoConfig } from './repo-config.js';
 import { checkScope, withRole } from './roles.js';
+import { isVisionModel } from '../models/pick.js';
 import { defaultBackend } from './runner.js';
 import { createTools } from './tools.js';
 import { createWebTools } from './web-tools.js';
@@ -113,7 +114,7 @@ export class WebRunner implements TaskRunner {
         session = new WebSession(sandbox.interactive(['node', driver]));
       }
       const roots = { main: ctx.workdir, extra: ctx.extraDirs, scope: task.paths };
-      const vision = ctx.config.visionModels.includes(backend.model);
+      const vision = isVisionModel(backend.model);
       const tools = [...createTools(roots, null), ...createWebTools(session, electron ? 'test_electron' : 'test_web', { vision })];
       const instructions = await repoInstructions(ctx.workdir);
       const user = [

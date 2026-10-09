@@ -14,6 +14,52 @@ function Get-DataDir {
   return Join-Path $base "gab-ai-node"
 }
 
+# The pinned llama-server (llama-server.pin) goes to <data folder>\llama.cpp\bin, the path
+# apps/node/src/config.ts expects. A ".version" file there holds "<tag> <sha256>" of what is installed.
+function Install-LlamaServer($root) {
+  $pin = Join-Path $root "llama-server.pin"
+  if (-not (Test-Path $pin)) { throw "$pin is missing" }
+  $lines = Get-Content $pin | Where-Object { $_ -and -not $_.StartsWith("#") } | ForEach-Object { , ($_ -split '\s+') }
+  $tag = ($lines | Where-Object { $_[0] -eq "tag" } | Select-Object -First 1)[1]
+  $arch = switch ($env:PROCESSOR_ARCHITECTURE) { "AMD64" { "x64" } "ARM64" { "arm64" } default { throw "no llama-server build is pinned for $($env:PROCESSOR_ARCHITECTURE)" } }
+  # Vulkan build when a Vulkan loader is installed (NVIDIA, AMD and Intel drivers bring it); there is no arm64 Vulkan pin.
+  $vulkan = ($arch -eq "x64") -and (Test-Path (Join-Path $env:SystemRoot "System32\vulkan-1.dll"))
+  $variant = "win-$arch$(if ($vulkan) { '-vulkan' })"
+  $asset = $lines | Where-Object { $_[0] -eq "asset" -and $_[1] -eq $variant } | Select-Object -First 1
+  if (-not $tag -or -not $asset) { throw "llama-server.pin has no build for '$variant'" }
+  $file = $asset[2]; $sha = $asset[3].ToLower()
+
+  $base = Join-Path (Get-DataDir) "llama.cpp"
+  $bin = Join-Path $base "bin"
+  $versionFile = Join-Path $bin ".version"
+  if ((Test-Path (Join-Path $bin "llama-server.exe")) -and (Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq "$tag $sha")) {
+    Write-Host "llama-server $tag ($variant) already installed"
+    return
+  }
+  New-Item -ItemType Directory -Force -Path $base | Out-Null
+  $tmp = Join-Path $base (".install." + [guid]::NewGuid().ToString("N").Substring(0, 8))
+  New-Item -ItemType Directory -Path $tmp | Out-Null
+  try {
+    Write-Host "Downloading llama-server $tag ($variant)..."
+    $zip = Join-Path $tmp "pkg.zip"
+    $previous = $ProgressPreference
+    $ProgressPreference = "SilentlyContinue"  # the progress bar makes Invoke-WebRequest very slow
+    try { Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$file" -OutFile $zip }
+    finally { $ProgressPreference = $previous }
+    if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() -ne $sha) { throw "$file does not match the pinned SHA-256 (llama-server.pin): not installed" }
+    $x = Join-Path $tmp "x"
+    Expand-Archive -Path $zip -DestinationPath $x
+    if (-not (Test-Path (Join-Path $x "llama-server.exe"))) { throw "$file has no llama-server.exe" }
+    Get-ChildItem -Path $x -Recurse -File | Unblock-File
+    Set-Content -Path (Join-Path $x ".version") -Value "$tag $sha" -Encoding ascii
+    if (Test-Path $bin) { Remove-Item -Recurse -Force $bin }
+    Move-Item -Path $x -Destination $bin
+  } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+  & (Join-Path $bin "llama-server.exe") --version *> $null
+  if ($LASTEXITCODE -ne 0) { throw "the installed llama-server does not start on this machine ($variant)" }
+  Write-Host "llama-server $tag installed in $bin"
+}
+
 # Runs a program and throws when it fails (PowerShell does not on its own).
 function Invoke-Checked($exe, [string[]]$arguments) {
   & $exe @arguments

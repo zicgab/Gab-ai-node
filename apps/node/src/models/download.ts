@@ -1,24 +1,33 @@
 // Downloads a catalog model: resumable (.part + HTTP Range), hashed while
 // streaming, size and SHA-256 checked before the file is renamed into place.
 // A verified file gets a marker so later starts don't rehash 60 GB.
+// A vision model has two files (the model and its mmproj); both must be there and verified.
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import type { CatalogEntry } from './catalog.js';
-import { downloadUrl } from './catalog.js';
+import type { CatalogEntry, PinnedFile } from './catalog.js';
+import { catalogFiles, downloadUrl } from './catalog.js';
 
-export const modelPath = (dir: string, e: CatalogEntry) => path.join(dir, e.file);
-const markerPath = (dir: string, e: CatalogEntry) => `${modelPath(dir, e)}.verified`;
+const filePath = (dir: string, f: PinnedFile) => path.join(dir, f.file);
+const markerOf = (dir: string, f: PinnedFile) => `${filePath(dir, f)}.verified`;
 
-/** True when the file is there with the right size and was verified against the pinned hash. */
-export async function isInstalled(dir: string, e: CatalogEntry): Promise<boolean> {
+export const modelPath = (dir: string, e: CatalogEntry) => filePath(dir, e);
+/** The multimodal projector of a vision model (undefined for the others). */
+export const mmprojPath = (dir: string, e: CatalogEntry) => (e.mmproj ? filePath(dir, e.mmproj) : undefined);
+
+async function fileInstalled(dir: string, f: PinnedFile): Promise<boolean> {
   try {
-    const [s, marker] = await Promise.all([stat(modelPath(dir, e)), readFile(markerPath(dir, e), 'utf8')]);
-    return s.size === e.sizeBytes && marker.trim() === e.sha256;
+    const [s, marker] = await Promise.all([stat(filePath(dir, f)), readFile(markerOf(dir, f), 'utf8')]);
+    return s.size === f.sizeBytes && marker.trim() === f.sha256;
   } catch { return false; }
+}
+
+/** True when every file is there with the right size and was verified against its pinned hash. */
+export async function isInstalled(dir: string, e: CatalogEntry): Promise<boolean> {
+  return (await Promise.all(catalogFiles(e).map((f) => fileInstalled(dir, f)))).every(Boolean);
 }
 
 async function hashFile(file: string, hash = createHash('sha256')): Promise<ReturnType<typeof createHash>> {
@@ -26,41 +35,56 @@ async function hashFile(file: string, hash = createHash('sha256')): Promise<Retu
   return hash;
 }
 
-/** Rehashes the installed file; removes it and its marker on mismatch. */
+/** Rehashes the installed files; removes a file and its marker on mismatch. */
 export async function verifyModel(dir: string, e: CatalogEntry): Promise<boolean> {
-  const file = modelPath(dir, e);
-  const ok = (await stat(file)).size === e.sizeBytes && (await hashFile(file)).digest('hex') === e.sha256;
-  if (ok) await writeFile(markerPath(dir, e), e.sha256);
-  else await Promise.all([rm(file, { force: true }), rm(markerPath(dir, e), { force: true })]);
-  return ok;
+  let all = true;
+  for (const f of catalogFiles(e)) {
+    const file = filePath(dir, f);
+    let ok = false;
+    try { ok = (await stat(file)).size === f.sizeBytes && (await hashFile(file)).digest('hex') === f.sha256; } catch { /* missing */ }
+    if (ok) await writeFile(markerOf(dir, f), f.sha256);
+    else { all = false; await Promise.all([rm(file, { force: true }), rm(markerOf(dir, f), { force: true })]); }
+  }
+  return all;
 }
 
 export interface DownloadOptions {
+  /** Replaces the URL of the model's main file (tests). */
   url?: string;
   signal?: AbortSignal;
-  onProgress?: (doneBytes: number, totalBytes: number) => void;
+  /** Progress of the file being downloaded. */
+  onProgress?: (doneBytes: number, totalBytes: number, file: string) => void;
   fetchImpl?: typeof fetch;
 }
 
 export async function downloadModel(dir: string, e: CatalogEntry, opts: DownloadOptions = {}): Promise<'already-installed' | 'downloaded'> {
-  if (await isInstalled(dir, e)) return 'already-installed';
+  let downloaded = false;
+  for (const f of catalogFiles(e)) {
+    const url = f.file === e.file ? opts.url ?? downloadUrl(e) : downloadUrl(e, f.file);
+    if (await downloadFile(dir, e.id, f, url, opts) === 'downloaded') downloaded = true;
+  }
+  return downloaded ? 'downloaded' : 'already-installed';
+}
+
+async function downloadFile(dir: string, id: string, f: PinnedFile, url: string, opts: DownloadOptions): Promise<'already-installed' | 'downloaded'> {
+  if (await fileInstalled(dir, f)) return 'already-installed';
   await mkdir(dir, { recursive: true });
-  const file = modelPath(dir, e);
+  const file = filePath(dir, f);
   const part = `${file}.part`;
 
   let have = 0;
   try { have = (await stat(part)).size; } catch { /* no partial download */ }
-  if (have > e.sizeBytes) { await rm(part); have = 0; }
+  if (have > f.sizeBytes) { await rm(part); have = 0; }
 
   const fs = await statfs(dir);
   const free = fs.bavail * fs.bsize;
-  const need = e.sizeBytes - have;
+  const need = f.sizeBytes - have;
   if (free < need + 1024 ** 3) {
-    throw new Error(`not enough disk space for ${e.id}: need ${gb(need)} GB + 1 GB margin, ${gb(free)} GB free in ${dir}`);
+    throw new Error(`not enough disk space for ${id}: need ${gb(need)} GB + 1 GB margin, ${gb(free)} GB free in ${dir}`);
   }
 
   const hash = have > 0 ? await hashFile(part) : createHash('sha256');
-  const res = await (opts.fetchImpl ?? fetch)(opts.url ?? downloadUrl(e), {
+  const res = await (opts.fetchImpl ?? fetch)(url, {
     headers: have > 0 ? { range: `bytes=${have}-` } : {},
     redirect: 'follow',
     signal: opts.signal,
@@ -69,16 +93,16 @@ export async function downloadModel(dir: string, e: CatalogEntry, opts: Download
     // Server ignored the range: start over.
     return restart();
   }
-  if (res.status !== 200 && res.status !== 206) throw new Error(`download of ${e.id} failed: HTTP ${res.status}`);
-  if (!res.body) throw new Error(`download of ${e.id} failed: empty body`);
+  if (res.status !== 200 && res.status !== 206) throw new Error(`download of ${id} (${f.file}) failed: HTTP ${res.status}`);
+  if (!res.body) throw new Error(`download of ${id} (${f.file}) failed: empty body`);
   await stream(res.body, hash, have);
   return finish(hash);
 
   async function restart(): Promise<'downloaded'> {
     await rm(part, { force: true });
     const fresh = createHash('sha256');
-    const again = await (opts.fetchImpl ?? fetch)(opts.url ?? downloadUrl(e), { redirect: 'follow', signal: opts.signal });
-    if (again.status !== 200 || !again.body) throw new Error(`download of ${e.id} failed: HTTP ${again.status}`);
+    const again = await (opts.fetchImpl ?? fetch)(url, { redirect: 'follow', signal: opts.signal });
+    if (again.status !== 200 || !again.body) throw new Error(`download of ${id} (${f.file}) failed: HTTP ${again.status}`);
     await stream(again.body, fresh, 0);
     return finish(fresh);
   }
@@ -93,8 +117,8 @@ export async function downloadModel(dir: string, e: CatalogEntry, opts: Download
           const buf = chunk as Buffer;
           h.update(buf);
           done += buf.length;
-          if (done > e.sizeBytes) throw new Error(`download of ${e.id} is larger than the pinned ${e.sizeBytes} bytes`);
-          if (opts.onProgress && (done - lastReport > 64 * 1024 ** 2 || done === e.sizeBytes)) { lastReport = done; opts.onProgress(done, e.sizeBytes); }
+          if (done > f.sizeBytes) throw new Error(`download of ${id} (${f.file}) is larger than the pinned ${f.sizeBytes} bytes`);
+          if (opts.onProgress && (done - lastReport > 64 * 1024 ** 2 || done === f.sizeBytes)) { lastReport = done; opts.onProgress(done, f.sizeBytes, f.file); }
           yield buf;
         }
       },
@@ -106,12 +130,12 @@ export async function downloadModel(dir: string, e: CatalogEntry, opts: Download
   async function finish(h: ReturnType<typeof createHash>): Promise<'downloaded'> {
     const size = (await stat(part)).size;
     const digest = h.digest('hex');
-    if (size !== e.sizeBytes || digest !== e.sha256) {
+    if (size !== f.sizeBytes || digest !== f.sha256) {
       await rm(part, { force: true });
-      throw new Error(`download of ${e.id} rejected: got ${size} bytes sha256 ${digest}, expected ${e.sizeBytes} bytes sha256 ${e.sha256}`);
+      throw new Error(`download of ${id} (${f.file}) rejected: got ${size} bytes sha256 ${digest}, expected ${f.sizeBytes} bytes sha256 ${f.sha256}`);
     }
     await rename(part, file);
-    await writeFile(markerPath(dir, e), e.sha256);
+    await writeFile(markerOf(dir, f), f.sha256);
     return 'downloaded';
   }
 }

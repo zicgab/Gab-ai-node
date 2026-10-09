@@ -14,8 +14,9 @@ import { createTools } from './agent/tools.js';
 import { OpenAICompatibleBackend } from './backends/openai-compatible.js';
 import type { ModelBackend } from './backends/types.js';
 import { loadConfig } from './config.js';
-import { managedHost } from './models/commands.js';
-import { ExternalModelHost, type ModelHost } from './models/server.js';
+import { installedIds, managedHost } from './models/commands.js';
+import { fallbackModel } from './models/pick.js';
+import type { ModelHost } from './models/server.js';
 import { dataDir } from './paths.js';
 
 export const CANARY_DIR = fileURLToPath(new URL('../canary/', import.meta.url));
@@ -86,10 +87,10 @@ export async function evalCommand(args: string[]): Promise<void> {
   const runs = Number(values.runs);
   if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new Error('--runs must be 1-10');
   const config = await loadConfig();
-  const model = values.model ?? config.defaultModel;
-  if (!model) throw new Error('no model: set one with "gab-node models detect", or pass --model <id>');
-  if (!config.models.some((m) => m.id === model)) throw new Error(`${model} is not a model of this node (models: ${config.models.map((m) => m.id).join(', ') || 'none'})`);
-  const host: ModelHost = config.modelServer.mode === 'managed' ? await managedHost(config) : new ExternalModelHost(config.modelEndpoint, config.modelEndpoints);
+  const model = values.model ?? fallbackModel(installedIds(config));
+  if (!model) throw new Error('no model installed: gab-node models pull --all');
+  if (!installedIds(config).includes(model)) throw new Error(`${model} is not installed on this node (installed: ${installedIds(config).join(', ') || 'none'}): gab-node models pull ${model}`);
+  const host: ModelHost = await managedHost(config);
   const signal = new AbortController().signal;
   const results = [];
   try {

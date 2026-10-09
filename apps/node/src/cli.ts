@@ -10,7 +10,7 @@
 //   gab-node pause | resume                    stop/start taking new tasks on this machine
 //   gab-node status
 //   gab-node settings [battery on|off | max-cpu <n> | max-memory <n>]   machine protection
-//   gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id> | detect | manage
+//   gab-node models list | pull <id...|--all> | verify <id> | remove <id> | test [id] | manage
 //   gab-node eval [--model <id>] [--runs <n>]  review the bundled canary repo and score the model
 import { readFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
@@ -98,7 +98,7 @@ async function run(): Promise<void> {
   const store = defaultStore();
   const nodeToken = await store.get('NODE_TOKEN');
   if (!nodeToken) throw new Error('no node token: run "gab-node register" first');
-  const modelHost = config.modelServer.mode === 'managed' ? await managedHost(config) : undefined;
+  const modelHost = await managedHost(config);
   const agent = new NodeAgent({
     config,
     modelHost,

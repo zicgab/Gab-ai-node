@@ -17,8 +17,8 @@ const Response = z.object({
 });
 
 /**
- * Local model server speaking the OpenAI chat API (llama.cpp llama-server,
- * MLX, Ollama, vLLM). Connection failures and 5xx are retryable: the task goes
+ * The node's own llama.cpp llama-server, which speaks the OpenAI chat API
+ * (see models/server.ts). Connection failures and 5xx are retryable: the task goes
  * back to the queue rather than failing for good.
  */
 /** Messages as the API wants them: images become content parts of a user message. */

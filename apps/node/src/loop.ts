@@ -155,7 +155,7 @@ export class NodeAgent {
       if (this.d.health) {
         const h = await this.d.health();
         down = h.modelsDown ?? [];
-        const allowed = allowedKinds(kinds, h, this.d.dockerKinds ?? new Set(), config.minFreeDiskMb);
+        const allowed = allowedKinds(kinds, h, this.d.dockerKinds ?? new Set(), config.minFreeDiskMb, config);
         if (allowed.reason !== this.lastHold) {
           if (allowed.reason) log.warn('holding back tasks', { reason: allowed.reason, claiming: allowed.kinds });
           else if (this.lastHold) log.info('all task kinds available again');

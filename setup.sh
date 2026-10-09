@@ -91,6 +91,12 @@ main() {
   step "Models already on this machine"
   "${cli[@]}" models detect || echo "model detection failed (not fatal): run 'gab-node models detect' later"
 
+  step "Battery"
+  case "$(ask 'Let this node take tasks while the computer runs on battery? [y/N]')" in
+    [yY]*) "${cli[@]}" settings battery on >/dev/null && echo "Takes tasks on battery." ;;
+    *) "${cli[@]}" settings battery off >/dev/null && echo "No new task while on battery (change: gab-node settings battery on)." ;;
+  esac
+
   "${cli[@]}" status || true
 
   printf '\n\033[32mDone. Next:\033[0m\n'

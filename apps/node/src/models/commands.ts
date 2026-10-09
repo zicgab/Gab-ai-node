@@ -1,4 +1,4 @@
-// gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect
+// gab-node models list | pull <id...> | verify <id> | remove <id> | use <role|kind> <id|--clear> | detect | manage
 import { rm } from 'node:fs/promises';
 import { loadConfig, saveConfig, type NodeConfig } from '../config.js';
 import { Role, TaskKind } from '@gab-ai-node/protocol';
@@ -7,11 +7,13 @@ import { modelsDir } from '../paths.js';
 import { CATALOG, catalogEntry } from './catalog.js';
 import { downloadModel, isInstalled, modelPath, verifyModel } from './download.js';
 import { detectCommand } from './detect.js';
+import { manageCommand } from './manage.js';
 import { LlamaServerHost, type HostedModel } from './server.js';
 
 export async function modelsCommand(args: string[]): Promise<void> {
   const [sub, ...ids] = args;
   if (sub === 'detect') return detectCommand(ids);
+  if (sub === 'manage') return manageCommand();
   const config = await loadConfig();
   const dir = modelsDir();
   switch (sub) {

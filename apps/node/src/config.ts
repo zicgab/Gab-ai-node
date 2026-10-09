@@ -89,6 +89,11 @@ export const NodeConfig = z.object({
   minFreeDiskMb: z.number().int().min(0).default(10_240),
   /** Repo mirrors not fetched for this many days are deleted at start (fetched again if needed). */
   mirrorMaxAgeDays: z.number().int().min(1).max(3650).default(30),
+  /** Take tasks while the computer runs on battery (asked at install; "gab-node settings battery on|off"). */
+  runOnBattery: z.boolean().default(false),
+  /** No new task while the whole machine uses more CPU / memory than this (percent). */
+  maxCpuPercent: z.number().int().min(10).max(100).default(80),
+  maxMemoryPercent: z.number().int().min(10).max(100).default(80),
   maxConcurrent: z.number().int().min(1).max(32).default(1),
   /** Memory the models may use together; default 75% of RAM (unified memory on Apple Silicon). */
   memoryBudgetMb: z.number().int().positive().default(Math.floor((os.totalmem() / 1024 / 1024) * 0.75)),

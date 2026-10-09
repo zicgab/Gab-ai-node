@@ -77,6 +77,13 @@ Step "Models already on this machine"
 try { & node $cli models detect; if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" } }
 catch { Write-Host "model detection failed (not fatal): run 'gab-node models detect' later: $_" -ForegroundColor Yellow }
 
+Step "Battery"
+if ((Read-Host "Let this node take tasks while the computer runs on battery? [y/N]").Trim() -match '^[yY]') {
+  & node $cli settings battery on | Out-Null; Write-Host "Takes tasks on battery."
+} else {
+  & node $cli settings battery off | Out-Null; Write-Host "No new task while on battery (change: gab-node settings battery on)."
+}
+
 & node $cli status
 
 Write-Host "`nDone. Next:" -ForegroundColor Green

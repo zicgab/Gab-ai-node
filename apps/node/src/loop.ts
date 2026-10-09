@@ -9,6 +9,8 @@ import { HEARTBEAT_SECONDS } from '@gab-ai-node/protocol';
 import { ApiError, type CoordinatorClient } from './client.js';
 import type { NodeConfig } from './config.js';
 import { modelsThatFit } from './fit.js';
+import { allowedKinds, type HealthState } from './health.js';
+import { KeepAwake, pruneMirrors, rotateLogs } from './housekeeping.js';
 import { ExternalModelHost, type ModelHost } from './models/server.js';
 import { log } from './log.js';
 import { modelFor } from './models/pick.js';
@@ -44,6 +46,13 @@ export interface NodeDeps {
   /** Serves models to tasks; default: the external server at config.modelEndpoint. */
   modelHost?: ModelHost;
   idleMs?: number;
+  /** Checked before each claim (default: always healthy, for tests; "gab-node run" passes the real checks). */
+  health?: () => Promise<HealthState>;
+  /** Kinds held back while Docker is not running. */
+  dockerKinds?: ReadonlySet<TaskKind>;
+  /** Folder of the log files to rotate (default: none). */
+  logsDir?: string;
+  keepAwake?: KeepAwake;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -63,9 +72,30 @@ export class NodeAgent {
   private heartbeats = 0;
 
   private readonly modelHost: ModelHost;
+  private readonly keepAwake: KeepAwake;
+  private housekeepingTimer: NodeJS.Timeout | null = null;
+  private lastHold: string | null = null;
 
   constructor(private readonly d: NodeDeps) {
     this.modelHost = d.modelHost ?? new ExternalModelHost(d.config.modelEndpoint);
+    this.keepAwake = d.keepAwake ?? new KeepAwake();
+  }
+
+  /** Log rotation and mirror pruning: at start, then hourly. Failures are logged, never fatal. */
+  private async housekeeping(): Promise<void> {
+    try {
+      if (this.d.logsDir) {
+        const rotated = await rotateLogs(this.d.logsDir);
+        if (rotated.length) log.info('logs rotated', { files: rotated });
+      }
+      // Never while tasks run: their worktrees belong to these mirrors.
+      if (this.running.size === 0) {
+        const removed = await pruneMirrors(this.d.reposRoot ?? reposDir(), this.d.config.mirrorMaxAgeDays);
+        if (removed.length) log.info('unused repo mirrors removed', { mirrors: removed, olderThanDays: this.d.config.mirrorMaxAgeDays });
+      }
+    } catch (err) {
+      log.warn('housekeeping failed', { err: err as Error });
+    }
   }
 
   private get kinds(): TaskKind[] {
@@ -78,6 +108,9 @@ export class NodeAgent {
 
   async start(): Promise<void> {
     await cleanWorkDir(this.d.workRoot ?? workDir());
+    await this.housekeeping();
+    this.housekeepingTimer = setInterval(() => void this.housekeeping(), 3_600_000);
+    this.housekeepingTimer.unref();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), HEARTBEAT_SECONDS * 1000);
     this.loopDone = this.claimLoop();
     log.info('node started', { name: this.d.config.name, kinds: this.kinds, backends: this.d.config.backends });
@@ -87,6 +120,7 @@ export class NodeAgent {
   async stop(): Promise<void> {
     this.stopping.abort();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.housekeepingTimer) clearInterval(this.housekeepingTimer);
     for (const r of this.running.values()) this.abortTask(r, 'shutdown');
     await Promise.allSettled([this.loopDone, ...[...this.running.values()].map((r) => r.done)]);
     await this.modelHost.stop().catch((err) => log.error('stopping model servers failed', { err }));
@@ -122,9 +156,21 @@ export class NodeAgent {
         await sleep(idle, this.stopping.signal);
         continue;
       }
+      // Only the kinds that can run right now (Docker up, model server up, disk not full).
+      let kinds = this.kinds;
+      if (this.d.health) {
+        const allowed = allowedKinds(kinds, await this.d.health(), this.d.dockerKinds ?? new Set(), config.minFreeDiskMb);
+        if (allowed.reason !== this.lastHold) {
+          if (allowed.reason) log.warn('holding back tasks', { reason: allowed.reason, claiming: allowed.kinds });
+          else if (this.lastHold) log.info('all task kinds available again');
+          this.lastHold = allowed.reason;
+        }
+        kinds = allowed.kinds;
+        if (kinds.length === 0) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
+      }
       let res: ClaimResponse;
       try {
-        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: this.kinds, acceptBackends: config.backends, wait: true }, this.stopping.signal);
+        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: kinds, acceptBackends: config.backends, wait: true }, this.stopping.signal);
         backoff = idle;
       } catch (err) {
         if (this.stopping.signal.aborted) break;
@@ -136,6 +182,8 @@ export class NodeAgent {
       }
       if (!res.available) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
       if (res.task && res.leaseId) this.startTask(res.task, res.leaseId, res.github);
+      // The coordinator normally holds an empty claim open for a while; if it answers at once, don't spin.
+      else await sleep(idle, this.stopping.signal);
     }
   }
 
@@ -146,8 +194,9 @@ export class NodeAgent {
       events: [], done: Promise.resolve(),
     };
     this.running.set(task.id, r);
+    this.keepAwake.acquire();
     log.info('task started', { taskId: task.id, kind: task.kind, repo: task.repo, attempt: task.attempt, model: r.model });
-    r.done = this.runTask(r).finally(() => this.running.delete(task.id));
+    r.done = this.runTask(r).finally(() => { this.running.delete(task.id); this.keepAwake.release(); });
   }
 
   private async runTask(r: Running): Promise<void> {

@@ -9,6 +9,7 @@ import { Finding, type TaskResult } from '@gab-ai-node/protocol';
 import type { ModelBackend } from '../backends/types.js';
 import { exec } from '../exec.js';
 import { reposDir } from '../paths.js';
+import { ignoreNewUntracked, untrackedEntries } from '../repos.js';
 import { RetryableError, type TaskContext, type TaskRunner } from '../runner.js';
 import { DockerSandbox, type Sandbox } from '../sandbox.js';
 import { CodeIndex } from './code-index.js';
@@ -93,9 +94,12 @@ export class WorkRunner implements TaskRunner {
       let setupNote = 'No setup command in AGENT.md.';
       if (repoCfg.setup) {
         ctx.emit('progress', { stage: 'setup', command: repoCfg.setup, image });
+        const before = await untrackedEntries(ctx.workdir);
         const r = await sandbox.run(repoCfg.setup, { timeoutMs: ctx.config.sandbox.setupTimeoutMinutes * 60_000, network: true, signal: ctx.signal });
         setupNote = r.code === 0 ? `Setup "${repoCfg.setup}" succeeded.` : `Setup "${repoCfg.setup}" FAILED (exit ${r.code}): ${r.stderr.slice(-2_000)}`;
-        ctx.emit('log', { setup: r.code === 0 ? 'ok' : 'failed', code: r.code });
+        // What setup made (node_modules, build output) is never committed and never counts as out of scope.
+        const ignored = await ignoreNewUntracked(ctx.workdir, before);
+        ctx.emit('log', { setup: r.code === 0 ? 'ok' : 'failed', code: r.code, ignoredSetupFiles: ignored.slice(0, 20) });
       }
       const index = await CodeIndex.forCommit(ctx.workdir, this.indexCache, `${task.repo}@${head}`);
       await checkScope(ctx.workdir, task.paths);

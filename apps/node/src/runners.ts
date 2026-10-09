@@ -10,6 +10,10 @@ import type { NodeConfig } from './config.js';
 import { has } from './exec.js';
 import { log } from './log.js';
 import type { TaskRunner } from './runner.js';
+import type { TaskKind } from '@gab-ai-node/protocol';
+
+/** Kinds that run commands in Docker: held back while Docker is not running (see health.ts). */
+export const DOCKER_KINDS: ReadonlySet<TaskKind> = new Set([...new WorkRunner().kinds, ...new WebRunner().kinds, ...new ScanRunner().kinds]);
 
 /** Installed task runners. Kinds that run commands need Docker (never run on the host). */
 export async function createRunners(config: Pick<NodeConfig, 'mobile'>): Promise<TaskRunner[]> {

@@ -1,6 +1,6 @@
 // Repo checkouts: one bare mirror per repo (fetched before each task), and one
 // throwaway worktree per task under work/<task-id>. Worktrees are always removed.
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { RepoName, isAgentBranch } from '@gab-ai-node/protocol';
 import { exec } from './exec.js';
@@ -66,6 +66,27 @@ export async function addWorktree(mirror: string, taskId: string, label: string,
       await exec('git', ['-C', mirror, 'worktree', 'prune']);
     },
   };
+}
+
+/** Untracked entries as git shows them (folders collapsed, e.g. "node_modules/"). */
+export async function untrackedEntries(dir: string): Promise<Set<string>> {
+  const out = (await exec('git', ['-C', dir, 'status', '--porcelain', '-z'], { check: true })).stdout;
+  return new Set(out.split('\0').filter((e) => e.startsWith('?? ')).map((e) => e.slice(3)));
+}
+
+/**
+ * Makes the untracked files that appeared since `before` invisible to git in THIS worktree only
+ * (a per-worktree core.excludesFile), so files made by the repo's setup (node_modules, build
+ * output not in .gitignore) are never committed and never count as changes outside the task's folders.
+ */
+export async function ignoreNewUntracked(dir: string, before: Set<string>): Promise<string[]> {
+  const added = [...(await untrackedEntries(dir))].filter((e) => !before.has(e));
+  if (added.length === 0) return [];
+  const file = `${dir}.setup-exclude`;
+  await writeFile(file, added.map((e) => `/${e.replace(/([*?[\\!#])/g, '\\$1')}`).join('\n') + '\n');
+  await exec('git', ['-C', dir, 'config', 'extensions.worktreeConfig', 'true'], { check: true });
+  await exec('git', ['-C', dir, 'config', '--worktree', 'core.excludesFile', file], { check: true });
+  return added;
 }
 
 /** Removes leftovers of tasks interrupted by a crash (run at start). */

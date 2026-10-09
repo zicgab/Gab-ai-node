@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { NodeName } from '@gab-ai-node/protocol';
@@ -21,9 +22,10 @@ import { CoordinatorClient } from './client.js';
 import { loadConfig, NodeConfig, saveConfig } from './config.js';
 import { log } from './log.js';
 import { managedHost, modelsCommand } from './models/commands.js';
+import { createHealthCheck } from './health.js';
 import { NodeAgent } from './loop.js';
 import { dataDir, configFile, pauseFile } from './paths.js';
-import { createRunners } from './runners.js';
+import { createRunners, DOCKER_KINDS } from './runners.js';
 import { defaultStore, type SecretName } from './secrets/index.js';
 
 async function readHidden(prompt: string): Promise<string> {
@@ -99,6 +101,9 @@ async function run(): Promise<void> {
     client: new CoordinatorClient(config.coordinatorUrl, nodeToken),
     runners: await createRunners(config),
     capabilities: () => detectCapabilities(config),
+    health: createHealthCheck(config, dataDir()),
+    dockerKinds: DOCKER_KINDS,
+    logsDir: path.join(dataDir(), 'logs'),
     secrets: { github: await store.get('GITHUB_TOKEN'), anthropic: await store.get('ANTHROPIC_API_KEY') },
   });
   let stopping = false;

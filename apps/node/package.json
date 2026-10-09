@@ -1,0 +1,22 @@
+{
+  "name": "@gab-ai-node/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gab-node": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gab-ai-node/protocol": "0.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  }
+}

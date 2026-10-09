@@ -79,14 +79,16 @@ export function modelFolders(env: NodeJS.ProcessEnv = process.env, home = os.hom
 export async function startOllama(fetchFn: typeof fetch = fetch, waitMs = 30_000, platform = process.platform): Promise<boolean> {
   const up = async () => (await getJson(fetchFn, 'http://127.0.0.1:11434/api/tags')) !== null;
   if (await up()) return true;
+  // The background server only: opening the Ollama app would pop up its window, which the node does not need.
   let started = false;
-  if (platform === 'darwin') started = (await exec('open', ['-a', 'Ollama'])).code === 0;
-  if (!started && (await has('ollama'))) {
+  if (await has('ollama')) {
     const child = spawn('ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true });
     child.on('error', () => {}); // reported below as "did not answer"
     child.unref();
     started = true;
   }
+  // No command on PATH: the macOS app, opened hidden and in the background.
+  if (!started && platform === 'darwin') started = (await exec('open', ['-g', '-j', '-a', 'Ollama'])).code === 0;
   if (!started) return false;
   for (const end = Date.now() + waitMs; Date.now() < end; await new Promise((r) => setTimeout(r, 1_000))) {
     if (await up()) return true;

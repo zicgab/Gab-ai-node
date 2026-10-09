@@ -37,18 +37,26 @@ export async function runAgent(opts: {
     for (const call of calls) {
       const tool = byName.get(call.function.name);
       let output: string;
+      let image: string | null = null;
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
         if (!tool) throw new Error(`unknown tool ${call.function.name}`);
         opts.emit('tool_call', { step, tool: tool.name, args });
-        output = await tool.run(args);
+        const out = await tool.run(args);
+        if (typeof out === 'string') output = out;
+        else { output = out.text; image = out.image; }
       } catch (err) {
         // Tool errors go back to the model (it can correct itself); they don't end the task.
         output = `Error: ${(err as Error).message}`;
       }
       opts.emit('tool_result', { step, tool: call.function.name, chars: output.length, error: output.startsWith('Error: ') });
       messages.push({ role: 'tool', tool_call_id: call.id, content: output });
+      if (image) {
+        // Only the newest screenshot stays in the conversation: images are large and old ones are stale.
+        for (const m of messages) if (m.images) { delete m.images; m.content = `${m.content ?? ''} (older screenshot removed)`; }
+        messages.push({ role: 'user', content: `Screenshot from ${call.function.name} (the screen now):`, images: [image] });
+      }
     }
     if (tokens >= opts.maxTokens) {
       messages.push({ role: 'user', content: 'Token budget reached: answer now with what you found, without calling tools.' });

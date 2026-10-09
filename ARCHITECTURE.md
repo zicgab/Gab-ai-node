@@ -59,7 +59,9 @@ endpoint, GitHub tokens) lives in gasysteme, `ai-worker/agent/`.
 | `submit_task(repo, kind, instructions, role?, paths?, runs?, node?, ...)` | background task(s); returns the task ids. `role` = frontend / backend / security / uxui (checklist in `apps/node/src/agent/roles.ts`); `paths` = folders the file tools are limited to; `runs` = 1-20 copies (findings seen in many runs have a high `seen_count`) |
 | `set_finding_status(finding, status, note?)` | your review: open (confirmed), fixed, dismissed (false positive, hidden from `list_findings`) |
 | `fix_finding` / `list_findings` | fix a bug-hunt finding on its own branch / list deduplicated findings |
-| `chat_start` / `chat_send` / `chat_history` / `chat_end` | chat with the model of ONE node you pick (no repo, no tools). The chat stays on that node; the backend keeps the history and sends it with every message (migration 030) |
+| `chat_start` / `chat_send` / `chat_history` / `chat_end` | chat with the model of ONE node you pick (no repo, no tools). The chat stays on that node; the backend keeps the history and sends it with every message (migration 030). With a streaming model, `chat_send` / `chat_history` show `partial` (the answer so far) while the node writes |
+| `create_schedule` / `list_schedules` / `set_schedule_enabled` / `delete_schedule` | recurring tasks: hourly, daily or weekly at a local time in an IANA time zone (stays put across daylight saving); missed runs are not caught up; runs once even with several backends (migration 032) |
+| `node_health` | per node: online, running, completed/failed in 24 h, last failure; queue per kind. The backend also logs a node that is available but stops heartbeating |
 | `task_status` / `task_log` / `get_result` / `cancel_task` / `keep_branch` | follow and manage tasks |
 
 Task kinds a node runs today:
@@ -76,8 +78,11 @@ Task kinds a node runs today:
 | `test_web` | drive the app in Chromium | no | `can_run` |
 | `test_electron` | drive the Electron app (Playwright, Xvfb) | no | `can_run` |
 | `test_mobile` | drive the app on a simulator with Maestro (host, opt-in) | no | `can_run` |
+| `docs_check` | product code vs its marketing / how-to pages, 5 angles over `runs` | no | `docs_check` |
+| `translate` | fill in / fix i18n message files for the languages named; JSON must parse and keep placeholders | yes, `agent/**` branch | `can_push` (runs no commands) |
 
-Accepted by the backend but run by no node yet: `translate`, `eval`.
+`eval` is not a queue task: `gab-node eval` on the node reviews the bundled canary repo
+(`apps/node/canary`, problems planted on purpose) and scores the model (found / missed / false alarms).
 Every report-producing kind ends in findings (with evidence, `seen_count` across runs): review them with
 `list_findings` and `set_finding_status`.
 
@@ -138,6 +143,8 @@ evidence (they become findings, with `seen_count`). It never changes the repo an
 - Image `config.sandbox.webImage` (default `mcr.microsoft.com/playwright:v1.48.2-jammy`, pinned by digest in `IMAGES`, apps/node/src/config.ts) must match
   `PLAYWRIGHT_VERSION` in `agent/web-runner.ts`.
 - Pick a model for it: `gab-node models use test_web <model-id>`.
+- A model that can see images (`visionModels`, set by `gab-node models detect` from Ollama's capabilities) also
+  gets `screenshot`: the image goes to the model, only the newest one stays in the conversation. Useful for `uxui`.
 
 ### Model per role or kind
 `gab-node models use security <id>` / `... custom <id>` / `... --clear`. Order: the task's own `model`,
@@ -155,6 +162,12 @@ then the node's model for its role, then for its kind, then `defaultModel`.
   each task gets its own worktree on `agent/<node>/<task-id>`, deleted after push.
 - Agent loop: tool-calling over an OpenAI-compatible API; step and token budgets per task;
   every tool call logged as a task event.
+- Health before every claim (`health.ts`): only the kinds that can run now are claimed (Docker down: no
+  command kinds; model server down or disk under `minFreeDiskMb`: nothing; a model whose own server is down:
+  not offered). macOS: `caffeinate` while a task runs. Hourly: log rotation, mirrors unused for
+  `mirrorMaxAgeDays` deleted. Files made by `setup:` are hidden from git in the task's worktree (never committed).
+- Model servers: one default (`modelEndpoint`) plus optional per-model servers (`modelEndpoints`, e.g. LM Studio
+  next to Ollama): `gab-node models detect` → "add".
 - Sandboxing: Docker on macOS cannot use the Metal GPU, so the **model runs on the host**
   and **command execution** (tests, scripts) runs in a Docker container with the
   worktree mounted and no secrets. Read/grep run directly on the worktree (read-only ops).
@@ -202,5 +215,5 @@ The backend half (queue, MCP, GitHub tokens, migration) is in gasysteme: `ai-wor
 6. `bug_hunt` with command sandbox (Docker) → overnight run.
 7. `test_web` (Playwright), `translate`, then `test_mobile`; Claude backends.
 
-### Scope is focus, not a sandbox
-`paths` limits `read_file`, `list_dir`, `grep`, `search_code`, `write_file` and `replace_in_file`. `run_cmd` runs in the Docker container with the whole repo mounted, so a command can still read other folders of the same repo (never the host). Migrations 030 (chat) and 031 (roles, paths, finding notes) go with this.
+### Scope is focus, not a sandbox (on purpose)
+`paths` limits `read_file`, `list_dir`, `grep`, `search_code`, `write_file` and `replace_in_file`. `run_cmd` runs in the Docker container with the whole repo mounted, so a command can still **read** other folders of the same repo (never the host, never the network). That is deliberate: builds and tests need the whole repo. What is enforced: a task never **commits** a change outside its folders (`changedOutsideScope`; the task fails instead). Do not use `paths` to hide secrets from a model: keep secrets out of the repo. Migrations 030 (chat) and 031 (roles, paths, finding notes) go with this.

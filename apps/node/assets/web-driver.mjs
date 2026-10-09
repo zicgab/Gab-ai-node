@@ -119,6 +119,10 @@ const actions = {
     page = w;
     return state();
   },
+  async screenshot() {
+    const jpeg = await page.screenshot({ type: 'jpeg', quality: 60, fullPage: false, timeout: 10_000 });
+    return { ...(await state()), image: `data:image/jpeg;base64,${jpeg.toString('base64')}` };
+  },
   async problems(args) {
     const list = problems.slice(-MAX_LOG);
     if (args.clear) problems.length = 0;

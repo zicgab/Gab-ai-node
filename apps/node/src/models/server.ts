@@ -20,10 +20,10 @@ export interface ModelHost {
   stop(): Promise<void>;
 }
 
-/** Endpoint of a server I run myself (config.modelEndpoint); nothing to start. */
+/** Servers I run myself (config.modelEndpoint, or modelEndpoints for some models); nothing to start. */
 export class ExternalModelHost implements ModelHost {
-  constructor(private readonly endpoint: string) {}
-  async acquire() { return { endpoint: this.endpoint, release: () => {} }; }
+  constructor(private readonly endpoint: string, private readonly perModel: Record<string, string> = {}) {}
+  async acquire(model: string) { return { endpoint: this.perModel[model] ?? this.endpoint, release: () => {} }; }
   async stop() {}
 }
 

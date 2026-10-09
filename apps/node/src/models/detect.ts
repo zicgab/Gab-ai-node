@@ -20,7 +20,7 @@ export interface DetectedServer {
   /** OpenAI-compatible base URL, always on this machine. */
   endpoint: string;
   /** tools: the model can call tools (agent tasks need it); null when the server does not say. */
-  models: { id: string; sizeBytes: number | null; tools: boolean | null }[];
+  models: { id: string; sizeBytes: number | null; tools: boolean | null; vision?: boolean | null }[];
 }
 
 const PROBES = [
@@ -51,7 +51,7 @@ export async function probeServers(fetchFn: typeof fetch = fetch): Promise<Detec
         const models = await Promise.all(tags.data.models.map(async (m) => {
           const show = OllamaShow.safeParse(await getJson(fetchFn, `${p.base}/api/show`, { model: m.name }));
           const caps = show.success ? show.data.capabilities : undefined;
-          return { id: m.name, sizeBytes: m.size ?? null, tools: caps ? caps.includes('tools') : null };
+          return { id: m.name, sizeBytes: m.size ?? null, tools: caps ? caps.includes('tools') : null, vision: caps ? caps.includes('vision') : null };
         }));
         return { kind: p.kind, endpoint: `${p.base}/v1`, models };
       }
@@ -138,10 +138,34 @@ export function useServer(config: NodeConfig, server: DetectedServer, ids: strin
   if (chosen.length === 0) throw new Error('choose at least one model');
   config.modelServer.mode = 'external';
   config.modelEndpoint = server.endpoint;
+  config.modelEndpoints = {};
   config.models = [];
   config.defaultModel = null;
   config.roleModels = {};
+  config.visionModels = chosen.filter((m) => m.vision === true).map((m) => m.id);
   for (const m of chosen) addModel(config, m.id, estimateMemoryMb(m.sizeBytes));
+}
+
+/**
+ * Adds models of a second server next to the node's current ones (e.g. LM Studio next to Ollama):
+ * they get their own endpoint in modelEndpoints. The default server and models are kept.
+ */
+export function addServer(config: NodeConfig, server: DetectedServer, ids: string[]): void {
+  if (config.modelServer.mode !== 'external') throw new Error('adding a server needs external mode (the node runs no model server itself): use replace');
+  const chosen = ids.map((id) => {
+    const m = server.models.find((x) => x.id === id);
+    if (!m) throw new Error(`${server.kind} at ${server.endpoint} has no model "${id}"`);
+    return m;
+  });
+  if (chosen.length === 0) throw new Error('choose at least one model');
+  for (const m of chosen) {
+    const clash = config.models.some((x) => x.id === m.id) && (config.modelEndpoints[m.id] ?? config.modelEndpoint) !== server.endpoint;
+    if (clash) throw new Error(`a model named ${m.id} is already served by another server of this node`);
+    addModel(config, m.id, estimateMemoryMb(m.sizeBytes));
+    if (server.endpoint === config.modelEndpoint) delete config.modelEndpoints[m.id];
+    else config.modelEndpoints[m.id] = server.endpoint;
+    if (m.vision === true && !config.visionModels.includes(m.id)) config.visionModels.push(m.id);
+  }
 }
 
 
@@ -200,7 +224,7 @@ export function suggestRoles(models: { id: string; memoryMb: number }[], budgetM
 
 /**
  * detect: list (and start Ollama when it is installed but stopped, on a terminal after asking; --start: without asking).
- * detect --use <number> [model ids...]: apply without prompts. On a terminal with no --use: asks.
+ * detect --use <number> [model ids...] [--add]: apply without prompts (--add keeps the models of the current server). On a terminal with no --use: asks.
  */
 export async function detectCommand(args: string[]): Promise<void> {
   const tty = process.stdin.isTTY === true;
@@ -246,8 +270,8 @@ export async function detectCommand(args: string[]): Promise<void> {
       }
     }
 
-    const mark = (t: boolean | null) => (t === true ? ' [tools]' : t === false ? ' [no tools: not for agent tasks]' : '');
-    servers.forEach((s, i) => console.log(`${i + 1}. ${s.kind} at ${s.endpoint}\n${s.models.map((m) => `     ${m.id}${m.sizeBytes ? ` (${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB)` : ''}${mark(m.tools)}`).join('\n') || '     (no models)'}`));
+    const mark = (t: boolean | null, v?: boolean | null) => `${t === true ? ' [tools]' : t === false ? ' [no tools: not for agent tasks]' : ''}${v ? ' [vision]' : ''}`;
+    servers.forEach((s, i) => console.log(`${i + 1}. ${s.kind} at ${s.endpoint}\n${s.models.map((m) => `     ${m.id}${m.sizeBytes ? ` (${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB)` : ''}${mark(m.tools, m.vision)}`).join('\n') || '     (no models)'}`));
     if (servers.length > 1) console.log('A node uses ONE server: pick the one to use.');
 
     let pick: number; let ids: string[];
@@ -267,7 +291,11 @@ export async function detectCommand(args: string[]): Promise<void> {
     const server = servers[pick];
     if (!server) throw new Error(`no server number ${pick + 1}`);
     if (ids.length === 0) throw new Error(`no model to use on ${server.kind}: pull one first (e.g. "ollama pull qwen2.5-coder:14b")`);
-    useServer(config, server, ids);
+    // A node that already has models from another server: replace them, or add these next to them.
+    const other = config.models.length > 0 && config.modelServer.mode === 'external' && config.modelEndpoint !== server.endpoint;
+    const add = other && (args.includes('--add') || (tty && /^a/i.test(await ask(`This node already uses ${config.modelEndpoint}. Replace its models (r) or add these next to them (a)? [r/a] `))));
+    if (add) addServer(config, server, ids);
+    else useServer(config, server, ids);
     const plan = suggestRoles(config.models, config.memoryBudgetMb);
     if (plan.defaultModel) {
       const byModel = new Map<string, string[]>();
@@ -283,7 +311,7 @@ export async function detectCommand(args: string[]): Promise<void> {
 
     const model = config.defaultModel!;
     console.log(`Checking that ${model} can call tools (loading it can take a minute)...`);
-    const smoke = await toolSmokeTest(server.endpoint, model);
+    const smoke = await toolSmokeTest(config.modelEndpoints[model] ?? config.modelEndpoint, model);
     console.log(smoke.ok ? `${model}: OK, ${smoke.detail}.` : `${model}: WARNING, ${smoke.detail}. Agent tasks need tool calls: pick another model (gab-node models detect) or set a per-role model (gab-node models use).`);
   } finally { rl?.close(); }
 }

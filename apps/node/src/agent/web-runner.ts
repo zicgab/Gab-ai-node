@@ -113,13 +113,15 @@ export class WebRunner implements TaskRunner {
         session = new WebSession(sandbox.interactive(['node', driver]));
       }
       const roots = { main: ctx.workdir, extra: ctx.extraDirs, scope: task.paths };
-      const tools = [...createTools(roots, null), ...createWebTools(session, electron ? 'test_electron' : 'test_web')];
+      const vision = ctx.config.visionModels.includes(backend.model);
+      const tools = [...createTools(roots, null), ...createWebTools(session, electron ? 'test_electron' : 'test_web', { vision })];
       const instructions = await repoInstructions(ctx.workdir);
       const user = [
         electron
           ? `Repository: ${task.repo}. The desktop app (Electron, entry ${cfg.electron}) is open. It has no network: features that need an outside service may fail; say so, do not report that as a bug of the app unless the app does not handle it.`
           : `Repository: ${task.repo}. The app runs at ${cfg.url} (started with: ${cfg.start}). It has no network except itself: pages that need an outside service may fail; say so, do not report that as a bug of the app unless the app does not handle it.`,
         instructions ? `Repository instructions:\n${instructions}` : '',
+        vision ? 'You can see the screen with the screenshot tool: use it to check layout and visual problems, and say in the evidence what the screenshot showed.' : '',
         `Task:\n${task.instructions || 'Try the main flows of the app and report problems.'}`,
       ].filter(Boolean).join('\n\n');
 

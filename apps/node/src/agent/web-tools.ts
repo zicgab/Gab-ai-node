@@ -7,7 +7,7 @@ const show = (value: unknown): string => (typeof value === 'string' ? value : JS
  * The tools of a test_web / test_electron task: the model drives the page only through
  * these. A web page is opened with goto; an Electron app is already open and has windows.
  */
-export function createWebTools(session: Pick<WebSession, 'call'>, kind: 'test_web' | 'test_electron' = 'test_web'): ToolDef[] {
+export function createWebTools(session: Pick<WebSession, 'call'>, kind: 'test_web' | 'test_electron' = 'test_web', opts: { vision?: boolean } = {}): ToolDef[] {
   const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[]): ToolDef => ({
     name, description, parameters: { type: 'object', properties, required },
     async run(args) { return show(await session.call(name, args)); },
@@ -28,5 +28,16 @@ export function createWebTools(session: Pick<WebSession, 'call'>, kind: 'test_we
     tool('press', 'Press a key, e.g. Enter, Tab, Escape. Returns the new url and title.', { key: { type: 'string' } }, ['key']),
     tool('wait', 'Wait until an element exists (up to 15 s).', { selector, timeoutMs: { type: 'integer' } }, ['selector']),
     tool('problems', 'Problems since the start: console errors, uncaught exceptions, failed requests, HTTP errors (>= 400). Check it after every page you open.', { clear: { type: 'boolean' } }, []),
+    // Only for a model that can see images: layout, overlap, contrast, things text cannot show.
+    ...(opts.vision ? [{
+      name: 'screenshot',
+      description: 'See the screen as it looks now (an image). Use it for layout, overlapping or cut-off elements, contrast, spacing; one at a time.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      async run() {
+        const r = await session.call('screenshot', {}) as { url?: string; title?: string; image?: string };
+        if (typeof r?.image !== 'string' || !r.image.startsWith('data:image/')) throw new Error('the driver returned no image');
+        return { text: `screenshot of ${r.title ?? ''} ${r.url ?? ''}`.trim(), image: r.image };
+      },
+    } satisfies ToolDef] : []),
   ];
 }

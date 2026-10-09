@@ -89,7 +89,7 @@ export async function evalCommand(args: string[]): Promise<void> {
   const model = values.model ?? config.defaultModel;
   if (!model) throw new Error('no model: set one with "gab-node models detect", or pass --model <id>');
   if (!config.models.some((m) => m.id === model)) throw new Error(`${model} is not a model of this node (models: ${config.models.map((m) => m.id).join(', ') || 'none'})`);
-  const host: ModelHost = config.modelServer.mode === 'managed' ? await managedHost(config) : new ExternalModelHost(config.modelEndpoint);
+  const host: ModelHost = config.modelServer.mode === 'managed' ? await managedHost(config) : new ExternalModelHost(config.modelEndpoint, config.modelEndpoints);
   const signal = new AbortController().signal;
   const results = [];
   try {

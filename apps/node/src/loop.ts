@@ -77,7 +77,7 @@ export class NodeAgent {
   private lastHold: string | null = null;
 
   constructor(private readonly d: NodeDeps) {
-    this.modelHost = d.modelHost ?? new ExternalModelHost(d.config.modelEndpoint);
+    this.modelHost = d.modelHost ?? new ExternalModelHost(d.config.modelEndpoint, d.config.modelEndpoints);
     this.keepAwake = d.keepAwake ?? new KeepAwake();
   }
 
@@ -149,17 +149,13 @@ export class NodeAgent {
         await sleep(idle, this.stopping.signal);
         continue;
       }
-      const runningModels = [...this.running.values()].map((r) => r.model).filter((m): m is string => !!m);
-      const fit = modelsThatFit(config.models, runningModels, config.memoryBudgetMb);
-      // Tasks without a model use the default one: don't claim if it can't load now.
-      if (config.backends.includes('local') && config.defaultModel && !fit.includes(config.defaultModel)) {
-        await sleep(idle, this.stopping.signal);
-        continue;
-      }
       // Only the kinds that can run right now (Docker up, model server up, disk not full).
       let kinds = this.kinds;
+      let down: string[] = [];
       if (this.d.health) {
-        const allowed = allowedKinds(kinds, await this.d.health(), this.d.dockerKinds ?? new Set(), config.minFreeDiskMb);
+        const h = await this.d.health();
+        down = h.modelsDown ?? [];
+        const allowed = allowedKinds(kinds, h, this.d.dockerKinds ?? new Set(), config.minFreeDiskMb);
         if (allowed.reason !== this.lastHold) {
           if (allowed.reason) log.warn('holding back tasks', { reason: allowed.reason, claiming: allowed.kinds });
           else if (this.lastHold) log.info('all task kinds available again');
@@ -167,6 +163,14 @@ export class NodeAgent {
         }
         kinds = allowed.kinds;
         if (kinds.length === 0) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
+      }
+      const runningModels = [...this.running.values()].map((r) => r.model).filter((m): m is string => !!m);
+      // A model whose own server is down is not offered (its tasks would only fail).
+      const fit = modelsThatFit(config.models, runningModels, config.memoryBudgetMb).filter((m) => !down.includes(m));
+      // Tasks without a model use the default one: don't claim if it can't load now.
+      if (config.backends.includes('local') && config.defaultModel && !fit.includes(config.defaultModel)) {
+        await sleep(idle, this.stopping.signal);
+        continue;
       }
       let res: ClaimResponse;
       try {

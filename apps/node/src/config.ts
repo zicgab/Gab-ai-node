@@ -36,6 +36,10 @@ export const NodeConfig = z.object({
    * one. A role wins over a kind. Set with "gab-node models use <role|kind> <model-id>".
    */
   roleModels: z.record(z.enum([...Role.options, ...TaskKind.options]), z.string().min(1)).default({}),
+  /** Models that can see images (screenshots in test_web / test_electron); set by "gab-node models detect". */
+  visionModels: z.array(z.string().min(1)).default([]),
+  /** Models served by another local server than modelEndpoint (e.g. LM Studio next to Ollama): model id -> endpoint. */
+  modelEndpoints: z.record(z.string().min(1), z.string().url()).default({}),
   /** OpenAI-compatible endpoint of the local model server (llama-server), localhost only. */
   modelEndpoint: z.string().url().default('http://127.0.0.1:8080/v1'),
   /**

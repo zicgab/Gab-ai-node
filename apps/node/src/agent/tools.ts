@@ -15,7 +15,8 @@ export interface ToolDef {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  run(args: Record<string, unknown>): Promise<string>;
+  /** Text for the model; a tool may also return a screenshot (data: URL) for a vision model. */
+  run(args: Record<string, unknown>): Promise<string | { text: string; image: string }>;
 }
 
 /** Roots the agent can see: "" is the primary repo, "@owner/name" an extra repo. */

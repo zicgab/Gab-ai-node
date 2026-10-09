@@ -169,8 +169,34 @@ install_command() {
 exec node "$root/apps/node/dist/cli.js" "\$@"
 EOF
   chmod +x "$bin/gab-node"
-  case ":$PATH:" in *":$bin:"*) ;; *) warn "$bin is not in your PATH: add it to use the gab-node command" ;; esac
   echo "gab-node command in $bin"
+  # macOS and many Linux setups do not put ~/.local/bin in PATH: add it once to the shell's rc file.
+  local rc
+  rc=$(shell_rc_file)
+  if ! grep -qF "$GAB_PATH_MARK" "$rc" 2> /dev/null; then
+    printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n' "$GAB_PATH_MARK" >> "$rc"
+    echo "added $bin to PATH in $rc"
+  fi
+  case ":$PATH:" in *":$bin:"*) ;; *) warn "open a new terminal (or run: source $rc) to use gab-node" ;; esac
 }
 
-remove_command() { rm -f "$HOME/.local/bin/gab-node"; }
+GAB_PATH_MARK='# gab-ai-node: gab-node command'
+
+# The rc file a new terminal of the user's shell reads.
+shell_rc_file() {
+  case "$(basename "${SHELL:-}")" in
+    zsh) echo "$HOME/.zshrc" ;;
+    bash) if [ "$(uname -s)" = Darwin ]; then echo "$HOME/.bash_profile"; else echo "$HOME/.bashrc"; fi ;;
+    *) echo "$HOME/.profile" ;;
+  esac
+}
+
+remove_command() {
+  local rc
+  rm -f "$HOME/.local/bin/gab-node"
+  for rc in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+    [ -f "$rc" ] && grep -qF "$GAB_PATH_MARK" "$rc" || continue
+    # Drop the mark line and the export line after it.
+    awk -v m="$GAB_PATH_MARK" '$0 == m { skip = 1; next } skip { skip = 0; next } { print }' "$rc" > "$rc.gab-tmp" && mv "$rc.gab-tmp" "$rc"
+  done
+}

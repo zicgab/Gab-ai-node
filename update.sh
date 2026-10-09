@@ -56,6 +56,8 @@ main() {
     die "update failed, still on ${current:0:7}"
   fi
   rm -rf "$old"
+  # Re-made on every update so installs get fixes to it (e.g. the PATH line).
+  install_command "$root"
   start_service
   echo "updated to ${sha:0:7}; the node runs again"
 }

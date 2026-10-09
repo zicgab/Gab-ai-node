@@ -13,6 +13,10 @@ export interface CatalogEntry {
   contextSize: number;
   /** Extra llama-server arguments for this model. */
   serverArgs: string[];
+  /** Same model in Ollama's library ("ollama pull <tag>"; Ollama checks its own digests). */
+  ollama: string;
+  /** Roles and task kinds this model is proposed for when it is installed (a judgment, not a benchmark). */
+  useFor: string[];
 }
 
 export const CATALOG: readonly CatalogEntry[] = [
@@ -27,6 +31,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     memoryMb: 24_576,
     contextSize: 65_536,
     serverArgs: [],
+    ollama: 'qwen3-coder:30b',
+    useFor: ['frontend', 'backend', 'custom', 'contract_check', 'test_web', 'test_electron', 'test_mobile', 'ask'],
   },
   {
     id: 'gpt-oss-120b',
@@ -39,6 +45,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     memoryMb: 71_680,
     contextSize: 65_536,
     serverArgs: [],
+    ollama: 'gpt-oss:120b',
+    useFor: ['security', 'uxui', 'bug_hunt', 'fix_finding', 'scan', 'docs_check'],
   },
   {
     id: 'gpt-oss-20b',
@@ -51,6 +59,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     memoryMb: 16_384,
     contextSize: 65_536,
     serverArgs: [],
+    ollama: 'gpt-oss:20b',
+    useFor: ['chat'],
   },
 ];
 

@@ -28,6 +28,24 @@ Remove-Task
 Remove-Command $root
 Write-Host "removed"
 
+# Models the node downloaded through Ollama (never ones you had before): optional, they can be tens of GB.
+$pulled = Join-Path (Get-DataDir) "ollama-pulled.txt"
+if ((Test-Path $pulled) -and (Get-Command ollama -ErrorAction SilentlyContinue)) {
+  $tags = @(Get-Content $pulled | Where-Object { $_ })
+  if ($tags.Count) {
+    Step "Models downloaded by this node"
+    $tags | ForEach-Object { Write-Host "  $_" }
+    $a = Read-Host "Remove these from Ollama too? Other apps using them lose them [y/N]"
+    if ($a -match '^(y|yes)$') {
+      foreach ($t in $tags) {
+        & ollama rm $t
+        if ($LASTEXITCODE -eq 0) { Write-Host "removed $t" } else { Write-Host "could not remove $t (is Ollama running?): ollama rm $t" -ForegroundColor Yellow }
+      }
+      Remove-Item -Force $pulled
+    } else { Write-Host "models kept (later: ollama rm <name>)" }
+  }
+}
+
 if ($Purge) {
   Step "Data folder"
   Remove-Item -Recurse -Force (Get-DataDir) -ErrorAction Stop

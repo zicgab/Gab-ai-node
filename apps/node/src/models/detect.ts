@@ -3,13 +3,16 @@
 // node at one ("external" mode: one endpoint serves every model of the node). It also reports
 // model folders of tools that are installed but not running, so you know what to start.
 import { spawn } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, appendFile, mkdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { loadConfig, saveConfig, type NodeConfig } from '../config.js';
 import { exec, has } from '../exec.js';
+import { dataDir } from '../paths.js';
+import { Role, TaskKind } from '@gab-ai-node/protocol';
+import { CATALOG, type CatalogEntry } from './catalog.js';
 import { addModel } from './commands.js';
 
 export interface DetectedServer {
@@ -141,6 +144,60 @@ export function useServer(config: NodeConfig, server: DetectedServer, ids: strin
   for (const m of chosen) addModel(config, m.id, estimateMemoryMb(m.sizeBytes));
 }
 
+
+/** Catalog models that Ollama can pull, fit this machine, and are not installed yet. */
+export function missingRecommended(installed: string[], budgetMb: number, catalog: readonly CatalogEntry[] = CATALOG): CatalogEntry[] {
+  return catalog.filter((e) => e.memoryMb <= budgetMb && !installed.includes(e.ollama));
+}
+
+/** Models this node downloaded through Ollama, one per line: uninstall offers to remove only these. */
+export const pulledFile = (dir = dataDir()) => path.join(dir, 'ollama-pulled.txt');
+
+export async function rememberPulled(tag: string, file = pulledFile()): Promise<void> {
+  const known = (await readFile(file, 'utf8').catch(() => '')).split('\n');
+  if (known.includes(tag)) return;
+  await mkdir(path.dirname(file), { recursive: true });
+  await appendFile(file, `${tag}\n`);
+}
+
+/** "ollama pull <tag>", showing Ollama's own progress. */
+export function ollamaPull(tag: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('ollama', ['pull', tag], { stdio: 'inherit', windowsHide: true });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
+type Slot = keyof NodeConfig['roleModels'];
+const SLOTS = new Set<string>([...Role.options, ...TaskKind.options]);
+const CODE: Slot[] = ['frontend', 'backend', 'custom', 'fix_finding', 'contract_check', 'test_web', 'test_electron', 'test_mobile', 'ask'];
+const DEEP: Slot[] = ['security', 'uxui', 'bug_hunt', 'scan', 'docs_check'];
+const QUICK: Slot[] = ['chat'];
+
+/**
+ * Proposes a default model and a model per role from the chosen models: catalog models get the roles the
+ * catalog gives them; the rest is filled by rules of thumb (a "coder" model for code, the biggest model for
+ * reviews, the smallest for chat). Only models that fit the memory budget are used.
+ */
+export function suggestRoles(models: { id: string; memoryMb: number }[], budgetMb: number, catalog: readonly CatalogEntry[] = CATALOG): { defaultModel: string | null; roles: Partial<Record<Slot, string>> } {
+  const fit = models.filter((m) => m.memoryMb <= budgetMb).sort((a, b) => b.memoryMb - a.memoryMb);
+  if (fit.length === 0) return { defaultModel: null, roles: {} };
+  const roles: Partial<Record<Slot, string>> = {};
+  for (const m of fit) {
+    const e = catalog.find((c) => c.ollama === m.id || c.id === m.id);
+    for (const slot of e?.useFor ?? []) if (SLOTS.has(slot) && !roles[slot as Slot]) roles[slot as Slot] = m.id;
+  }
+  const coder = fit.find((m) => /coder|code/i.test(m.id))?.id;
+  const biggest = fit[0]!.id;
+  const smallest = fit[fit.length - 1]!.id;
+  const fill = (slots: Slot[], id: string) => { for (const s of slots) roles[s] ??= id; };
+  fill(CODE, coder ?? biggest);
+  fill(DEEP, biggest);
+  fill(QUICK, smallest);
+  return { defaultModel: roles.backend ?? coder ?? biggest, roles };
+}
+
 /**
  * detect: list (and start Ollama when it is installed but stopped, on a terminal after asking; --start: without asking).
  * detect --use <number> [model ids...]: apply without prompts. On a terminal with no --use: asks.
@@ -165,9 +222,30 @@ export async function detectCommand(args: string[]): Promise<void> {
     if (servers.length === 0) {
       console.log('No running model server found (looked for Ollama :11434, LM Studio :1234, llama.cpp :8080, vLLM :8000).');
       for (const f of folders) console.log(`Found ${f.tool} files at ${f.dir}: ${f.hint}`);
-      if (folders.length === 0) console.log('Nothing installed that I know of: use "gab-node models pull <id>" to download a model.');
+      if (!folders.some((f) => f.tool === 'Ollama')) {
+        console.log('Easiest: install Ollama (https://ollama.com/download), then run "gab-node models detect": it offers the recommended models.');
+        console.log('Or without Ollama: "gab-node models list" then "gab-node models pull <id>" (pinned, hash-checked files run by llama-server).');
+      }
       return;
     }
+    const config = await loadConfig();
+    const ollama = servers.find((x) => x.kind === 'ollama');
+    if (ollama && (tty || args.includes('--pull'))) {
+      const missing = missingRecommended(ollama.models.map((m) => m.id), config.memoryBudgetMb);
+      if (missing.length) {
+        console.log(`Recommended models that fit this machine (${(config.memoryBudgetMb / 1024).toFixed(0)} GB budget) and are not installed:`);
+        for (const e of missing) console.log(`     ${e.ollama.padEnd(18)} ${(e.sizeBytes / 1024 ** 3).toFixed(0).padStart(3)} GB  ${e.role}`);
+        const a = args.includes('--pull') ? 'all' : await ask('Download them? [all / names separated by spaces / Enter = no] ');
+        const tags = /^all$/i.test(a) ? missing.map((e) => e.ollama) : a.split(/\s+/).filter((t) => missing.some((e) => e.ollama === t));
+        for (const tag of tags) {
+          console.log(`Downloading ${tag} (ollama pull)...`);
+          if (await ollamaPull(tag)) await rememberPulled(tag);
+          else console.log(`${tag}: download failed (see above); continuing without it.`);
+        }
+        if (tags.length) servers = await probeServers();
+      }
+    }
+
     const mark = (t: boolean | null) => (t === true ? ' [tools]' : t === false ? ' [no tools: not for agent tasks]' : '');
     servers.forEach((s, i) => console.log(`${i + 1}. ${s.kind} at ${s.endpoint}\n${s.models.map((m) => `     ${m.id}${m.sizeBytes ? ` (${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB)` : ''}${mark(m.tools)}`).join('\n') || '     (no models)'}`));
     if (servers.length > 1) console.log('A node uses ONE server: pick the one to use.');
@@ -189,8 +267,16 @@ export async function detectCommand(args: string[]): Promise<void> {
     const server = servers[pick];
     if (!server) throw new Error(`no server number ${pick + 1}`);
     if (ids.length === 0) throw new Error(`no model to use on ${server.kind}: pull one first (e.g. "ollama pull qwen2.5-coder:14b")`);
-    const config = await loadConfig();
     useServer(config, server, ids);
+    const plan = suggestRoles(config.models, config.memoryBudgetMb);
+    if (plan.defaultModel) {
+      const byModel = new Map<string, string[]>();
+      for (const [slot, id] of Object.entries(plan.roles)) byModel.set(id!, [...(byModel.get(id!) ?? []), slot]);
+      console.log(`Suggested models (from names and sizes; change later with "gab-node models use"):\n     default: ${plan.defaultModel}`);
+      for (const [id, slots] of byModel) console.log(`     ${id}: ${slots.join(', ')}`);
+      const go = args.includes('--roles') || (tty && !/^n/i.test(await ask('Use these? [Y/n] ')));
+      if (go) { config.defaultModel = plan.defaultModel; config.roleModels = plan.roles as NodeConfig['roleModels']; }
+    }
     await saveConfig(config);
     console.log(`Using ${server.kind} at ${server.endpoint}: ${config.models.map((m) => m.id).join(', ')} (default ${config.defaultModel}).`);
     console.log('Memory per model is an estimate (file size + 20%); a wrong estimate only affects how many models load at once.');

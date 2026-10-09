@@ -1,8 +1,11 @@
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { NodeConfig } from '../src/config.js';
-import { estimateMemoryMb, modelFolders, probeServers, suggestedModels, toolSmokeTest, useServer, type DetectedServer } from '../src/models/detect.js';
+import { estimateMemoryMb, modelFolders, probeServers, missingRecommended, rememberPulled, suggestRoles, suggestedModels, toolSmokeTest, useServer, type DetectedServer } from '../src/models/detect.js';
 
 const routes: Record<string, unknown> = {
   '/api/tags': { models: [{ name: 'qwen2.5-coder:14b', size: 9_000_000_000 }] },
@@ -80,5 +83,35 @@ describe('choosing and checking models', () => {
     expect(await toolSmokeTest('http://e/v1', 'x', text)).toEqual({ ok: false, detail: 'answered without calling the tool' });
     const down = (() => Promise.reject(new Error('refused'))) as typeof fetch;
     expect((await toolSmokeTest('http://e/v1', 'x', down)).ok).toBe(false);
+  });
+});
+
+describe('recommended models and roles', () => {
+  it('offers the catalog models that fit and are not installed', () => {
+    expect(missingRecommended(['qwen3-coder:30b'], 96 * 1024).map((e) => e.ollama)).toEqual(['gpt-oss:120b', 'gpt-oss:20b']);
+    expect(missingRecommended([], 20 * 1024).map((e) => e.ollama)).toEqual(['gpt-oss:20b']);
+  });
+
+  it('gives catalog models their roles and fills the rest by rules of thumb', () => {
+    const plan = suggestRoles([{ id: 'qwen3-coder:30b', memoryMb: 24_576 }, { id: 'gpt-oss:120b', memoryMb: 71_680 }, { id: 'qwen2.5:14b', memoryMb: 10_000 }], 96 * 1024);
+    expect(plan.defaultModel).toBe('qwen3-coder:30b');
+    expect(plan.roles).toMatchObject({ backend: 'qwen3-coder:30b', frontend: 'qwen3-coder:30b', security: 'gpt-oss:120b', docs_check: 'gpt-oss:120b', chat: 'qwen2.5:14b' });
+  });
+
+  it('uses a coder model for code, the biggest for reviews, the smallest for chat; skips what does not fit', () => {
+    const plan = suggestRoles([{ id: 'qwen2.5:72b', memoryMb: 53_000 }, { id: 'qwen2.5-coder:32b', memoryMb: 22_000 }, { id: 'qwen2.5:14b', memoryMb: 10_000 }, { id: 'huge', memoryMb: 500_000 }], 96 * 1024);
+    expect(plan).toMatchObject({ defaultModel: 'qwen2.5-coder:32b', roles: { backend: 'qwen2.5-coder:32b', security: 'qwen2.5:72b', chat: 'qwen2.5:14b' } });
+    expect(Object.values(plan.roles)).not.toContain('huge');
+    expect(suggestRoles([{ id: 'huge', memoryMb: 500_000 }], 1024)).toEqual({ defaultModel: null, roles: {} });
+  });
+});
+
+describe('rememberPulled', () => {
+  it('records each downloaded model once, for uninstall', async () => {
+    const file = path.join(await mkdtemp(path.join(os.tmpdir(), 'gab-pulled-')), 'sub', 'ollama-pulled.txt');
+    await rememberPulled('gpt-oss:120b', file);
+    await rememberPulled('qwen3-coder:30b', file);
+    await rememberPulled('gpt-oss:120b', file);
+    expect(await readFile(file, 'utf8')).toBe('gpt-oss:120b\nqwen3-coder:30b\n');
   });
 });

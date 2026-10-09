@@ -1,22 +1,28 @@
 #!/bin/bash
 # Removes this node (macOS and Linux; uninstall.ps1 on Windows).
 #
-#   bash uninstall.sh [--purge]
+#   bash uninstall.sh [--purge] [--remove-code]
 #
 # 1. Tells the backend (gab-node retire): the tasks this node holds go back to
 #    the queue and the node is turned off, so its token stops working.
 # 2. Stops and removes the automatic start and the gab-node command.
 # 3. Optionally removes the models it downloaded through Ollama (asks; only those).
 # --purge also deletes the data folder (config, secrets file on Linux, repo
-# mirrors, models: models can be many GB). The code folder is left: remove it
-# yourself when you are done (rm -rf <this folder>).
+# mirrors, models: models can be many GB). It also asks whether to delete this
+# code folder (--remove-code: yes, without asking; the installer uses it to reinstall).
 
 main() {
   set -euo pipefail
-  local root purge=0 answer
+  local root purge=0 remove_code=0 answer arg
   root="$(cd "$(dirname "$0")" && pwd)"
   . "$root/node-lib.sh"
-  [ "${1:-}" != --purge ] || purge=1
+  for arg in "$@"; do
+    case $arg in
+      --purge) purge=1 ;;
+      --remove-code) remove_code=1 ;;
+      *) echo "usage: bash uninstall.sh [--purge] [--remove-code]" >&2; return 1 ;;
+    esac
+  done
 
   answer=$(ask "Remove this node from this machine and the backend? [y/N]")
   case $answer in y | Y | yes) ;; *) echo "nothing changed"; return 0 ;; esac
@@ -58,7 +64,17 @@ main() {
   else
     echo "data folder kept: $(data_dir) (bash uninstall.sh --purge deletes it)"
   fi
-  echo "Code folder kept: remove it with: rm -rf \"$root\""
+  if [ "$remove_code" = 0 ]; then
+    answer=$(ask "Also delete the code folder $root? [y/N]")
+    case $answer in y | Y | yes) remove_code=1 ;; esac
+  fi
+  if [ "$remove_code" = 1 ]; then
+    # Last step: the running script keeps its open file, so deleting its own folder is safe.
+    cd "$HOME" && rm -rf "$root"
+    echo "code folder removed: $root"
+  else
+    echo "Code folder kept: remove it with: rm -rf \"$root\""
+  fi
 }
 
 main "$@"

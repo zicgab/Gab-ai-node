@@ -30,7 +30,7 @@ Going live for the first time: follow [docs/go-live.md](docs/go-live.md). Rotati
 | What | macOS, Linux | Windows |
 |---|---|---|
 | Update (rolls back if the build fails) | `bash update.sh` | `.\update.ps1` |
-| Remove | `bash uninstall.sh [--purge]` | `.\uninstall.ps1 [-Purge]` |
+| Remove | `bash uninstall.sh [--purge] [--remove-code]` | `.\uninstall.ps1 [-Purge] [-RemoveCode]` |
 | Status, pause, models | `gab-node status`, `gab-node pause`, `gab-node resume`, `gab-node models …` | same |
 | Logs | `<data folder>/logs` | `%LOCALAPPDATA%\gab-ai-node\logs` |
 

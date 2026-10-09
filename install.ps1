@@ -21,7 +21,13 @@
   if ($server -notmatch '^https?://[^/<>\s]+$') { throw 'Run it from the backend: irm http://<backend Tailscale IP>:3083/node/agent | iex' }
   $dir = if ($env:GAB_NODE_DIR) { $env:GAB_NODE_DIR } else { Join-Path $env:USERPROFILE "gab-ai-node" }
   if (Test-Path (Join-Path $dir ".version")) {
-    throw "Already installed in $dir. Setup stopped halfway: cd $dir; .\setup.ps1 (safe to re-run). Update: .\update.ps1"
+    # Already there (installed, or setup stopped halfway): offer a clean reinstall, which removes the old node first.
+    $again = Read-Host "Already installed in $dir. Remove it and install again? [y/N]"
+    if ($again -notin @("y", "Y", "yes")) { throw "Kept. Update: .\update.ps1. Setup stopped halfway: cd $dir; .\setup.ps1 (safe to re-run)" }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "uninstall.ps1") -RemoveCode
+    if ($LASTEXITCODE -ne 0) { throw "The old node was not removed." }
+    for ($i = 0; $i -lt 20 -and (Test-Path $dir); $i++) { Start-Sleep -Milliseconds 500 } # the uninstall deletes its folder after it exits
+    if (Test-Path (Join-Path $dir ".version")) { throw "The old node is still in $dir (uninstall was cancelled)." }
   }
   if ((Test-Path $dir) -and (Get-ChildItem -Path $dir -Force | Select-Object -First 1)) {
     throw "$dir exists and is not empty. Empty it, or set `$env:GAB_NODE_DIR to another folder."

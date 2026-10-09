@@ -1,15 +1,16 @@
 # Removes this node (Windows; uninstall.sh on macOS and Linux).
 #
-#   Set-ExecutionPolicy -Scope Process Bypass -Force; .\uninstall.ps1 [-Purge]
+#   Set-ExecutionPolicy -Scope Process Bypass -Force; .\uninstall.ps1 [-Purge] [-RemoveCode]
 #
 # 1. Tells the backend (gab-node retire): the tasks this node holds go back to
 #    the queue and the node is turned off, so its token stops working.
 # 2. Removes the scheduled task and the gab-node command.
 # -Purge also deletes the data folder (config, encrypted token, repo mirrors,
-# models: many GB). The code folder is left: remove it yourself when you are
-# done (it cannot delete the folder it runs from).
+# models: many GB). It also asks whether to delete this code folder (-RemoveCode:
+# yes, without asking; a script cannot delete the folder it runs from, so a
+# separate process does it after this one exits).
 
-param([switch]$Purge)
+param([switch]$Purge, [switch]$RemoveCode)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "node-lib.ps1")
 $root = $PSScriptRoot
@@ -53,4 +54,13 @@ if ($Purge) {
 } else {
   Write-Host "data folder kept: $(Get-DataDir) (.\uninstall.ps1 -Purge deletes it)"
 }
-Write-Host "Code folder kept: remove it with: Remove-Item -Recurse -Force '$root'"
+if (-not $RemoveCode) {
+  $a = Read-Host "Also delete the code folder $root? [y/N]"
+  if ($a -in @("y", "Y", "yes")) { $RemoveCode = $true }
+}
+if ($RemoveCode) {
+  Start-Process -WindowStyle Hidden -FilePath cmd.exe -ArgumentList "/c timeout /t 3 /nobreak >nul & rmdir /s /q `"$root`""
+  Write-Host "code folder $root is removed in a few seconds"
+} else {
+  Write-Host "Code folder kept: remove it with: Remove-Item -Recurse -Force '$root'"
+}

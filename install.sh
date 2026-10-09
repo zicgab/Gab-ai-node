@@ -28,7 +28,14 @@ main() {
   [[ $server =~ $url_re ]] || die 'run it from the backend: curl -fsSL http://<backend Tailscale IP>:3083/node/agent | bash'
   dir=${GAB_NODE_DIR:-$HOME/gab-ai-node}
   if [ -f "$dir/.version" ]; then
-    die "already installed in $dir. Setup stopped halfway: cd \"$dir\" && bash setup.sh (safe to re-run). Update: bash update.sh"
+    # Already there (installed, or setup stopped halfway): offer a clean reinstall, which removes the old node first.
+    [ -r /dev/tty ] || die "already installed in $dir. Update: bash update.sh. Setup stopped halfway: cd \"$dir\" && bash setup.sh"
+    printf 'Already installed in %s. Remove it and install again? [y/N] ' "$dir" > /dev/tty
+    local again
+    IFS= read -r again < /dev/tty
+    case $again in y | Y | yes) ;; *) die "kept. Update: bash update.sh. Setup stopped halfway: cd \"$dir\" && bash setup.sh (safe to re-run)" ;; esac
+    bash "$dir/uninstall.sh" --remove-code < /dev/tty || die "the old node was not removed"
+    [ ! -f "$dir/.version" ] || die "the old node is still in $dir (uninstall was cancelled)"
   fi
   if [ -d "$dir" ] && [ -n "$(ls -A "$dir")" ]; then
     die "$dir exists and is not empty. Empty it, or export GAB_NODE_DIR=<another folder>."

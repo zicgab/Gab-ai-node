@@ -5,7 +5,9 @@
 #   Set-ExecutionPolicy -Scope Process Bypass -Force; .\setup.ps1 [-Server URL] [-Name NAME] [-NoService] [-Register] [-Paused | -Window 22:00-07:00 [-TimeZone ZONE]]
 #
 # 1. Tools: Node.js 20+, npm, git must be installed (setup never installs
-#    software). Docker is checked: commands of bug hunts and tests run in it.
+#    them). Docker: bug hunts and tests run their commands in it; when missing, setup
+#    asks and installs Docker Desktop (signature checked, license accepted, one admin
+#    prompt, no window), then starts it and waits for it.
 # 2. Packages and build (npm ci, npm run build).
 #    Then llama-server, the node's only model engine: the release pinned in
 #    llama-server.pin is downloaded into the data folder and SHA-256 checked.
@@ -39,6 +41,7 @@ $cli = Get-Cli $root
 
 Step "Tools"
 Assert-Tools
+Initialize-Docker
 
 Step "Packages and build"
 Push-Location $root

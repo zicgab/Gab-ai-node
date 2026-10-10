@@ -17,7 +17,7 @@ Push it to GitHub as `zicgab/Gab-ai-node` (the backend serves the installer and 
 
 ## 3. A node
 1. Install: the one-liner from the README (it asks for the node key, the backend URL if not filled in, and a name).
-2. Docker must be running (needed for every kind except `ask`, `chat`, `contract_check`, `test_mobile`).
+2. Docker must be running (needed for every kind except `ask`, `chat`, `contract_check`, `test_mobile`). Setup installs it when missing (after asking; the admin password once) and starts it without a window; the node restarts it by itself afterwards.
 3. Models: `gab-node models setup` (the installer already offers it), or `gab-node models list` and
    `gab-node models pull --all`. The model for each job type is fixed (see ARCHITECTURE.md, "Model per task");
    `gab-node models test` checks that an installed model calls tools.

@@ -80,13 +80,75 @@ function Assert-Tools {
   if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { throw "npm is needed (it comes with Node.js)" }
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git is needed: winget install Git.Git (then open a new PowerShell)" }
   Write-Host "node $(& node --version), npm $(& npm.cmd --version), $(& git --version)"
-  $dockerOk = $false
-  if (Get-Command docker -ErrorAction SilentlyContinue) {
-    & docker info *> $null
-    $dockerOk = ($LASTEXITCODE -eq 0)
+}
+
+# --- Docker -------------------------------------------------------------------
+# Bug hunts and tests run their commands in Docker. Setup installs Docker Desktop when it is
+# missing (after asking; Windows shows one admin prompt), and starts it without its window.
+$DockerDesktopExe = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
+
+function Test-DockerUp {
+  $docker = Get-Command docker -ErrorAction SilentlyContinue
+  if (-not $docker) {
+    $bundled = Join-Path $env:ProgramFiles "Docker\Docker\resources\bin\docker.exe"
+    if (-not (Test-Path $bundled)) { return $false }
+    $docker = $bundled
   }
-  if ($dockerOk) { Write-Host "docker OK" }
-  else { Warn "Docker is not installed or not running: 'ask' tasks work, bug hunts and tests need it" }
+  & $docker info *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
+# Docker Desktop: start at login, never open its window (the dashboard).
+function Set-DockerDesktopQuiet {
+  $file = Join-Path $env:APPDATA "Docker\settings-store.json"
+  try {
+    New-Item -ItemType Directory -Force -Path (Split-Path $file) | Out-Null
+    $s = if (Test-Path $file) { Get-Content $file -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+    foreach ($k in 'AutoStart', 'OpenUIOnStartupDisabled', 'DisplayedOnboarding') { $s | Add-Member -NotePropertyName $k -NotePropertyValue $true -Force }
+    $s | ConvertTo-Json -Depth 20 | Set-Content -Path $file -Encoding utf8
+  } catch { Warn "could not write Docker Desktop settings (it may open its window once): $_" }
+}
+
+function Install-DockerDesktop {
+  $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+  $installer = Join-Path ([IO.Path]::GetTempPath()) "DockerDesktopInstaller-$([guid]::NewGuid()).exe"
+  try {
+    Write-Host "downloading Docker Desktop ($arch, about 600 MB)..."
+    Invoke-WebRequest -UseBasicParsing -Uri "https://desktop.docker.com/win/main/$arch/Docker%20Desktop%20Installer.exe" -OutFile $installer
+    $sig = Get-AuthenticodeSignature $installer
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O="?Docker Inc') {
+      throw "the installer is not signed by Docker Inc ($($sig.Status), $($sig.SignerCertificate.Subject))"
+    }
+    Write-Host "installing Docker Desktop (license accepted for you; Windows asks for admin rights once)"
+    # The installer and the docker-users group change need admin; one elevated PowerShell does both.
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    $script = "& '$installer' install --quiet --accept-license --backend=wsl-2; `$c = `$LASTEXITCODE; net localgroup docker-users '$user' /add 2>`$null; exit `$c"
+    $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile', '-Command', $script
+    if ($p.ExitCode -ne 0) { throw "the Docker Desktop installer failed (exit code $($p.ExitCode))" }
+    return $true
+  } catch {
+    Warn "Docker Desktop not installed: $_"
+    return $false
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $installer
+  }
+}
+
+# Running -> OK; installed -> start it; missing -> ask, install, start.
+function Initialize-Docker {
+  if (Test-DockerUp) { Write-Host "docker OK"; return }
+  if (-not (Test-Path $DockerDesktopExe)) {
+    if (-not [Environment]::UserInteractive) { Warn "Docker is not installed: bug hunts and tests stay off (run setup.ps1 in a terminal to install it)"; return }
+    if ((Read-Host "Docker is not installed. Bug hunts and tests need it. Install it now (one admin prompt)? [Y/n]").Trim() -match '^[nN]') {
+      Warn "Docker skipped: 'ask' tasks work, bug hunts and tests stay off (later: setup.ps1)"; return
+    }
+    if (-not (Install-DockerDesktop)) { return }
+  }
+  Set-DockerDesktopQuiet
+  Start-Process -FilePath $DockerDesktopExe -WindowStyle Hidden
+  Write-Host "waiting for Docker to start (up to 3 minutes)..."
+  for ($i = 0; $i -lt 90; $i++) { if (Test-DockerUp) { Write-Host "docker OK"; return }; Start-Sleep -Seconds 2 }
+  Warn "Docker did not come up yet (a first install may need a restart of Windows for WSL 2); the node starts it again by itself and enables bug hunts once it runs"
 }
 
 function Get-Cli($root) { return Join-Path $root "apps\node\dist\cli.js" }

@@ -6,8 +6,10 @@
 #   bash setup.sh [--server URL] [--name NAME] [--no-service] [--paused | --window 22:00-07:00 [--time-zone ZONE]]
 #
 # 1. Tools: Node.js 20+, git, npm (macOS: Homebrew installs what is missing;
-#    Linux: asks you to install it; setup never installs software with sudo). Docker is checked:
-#    commands of bug hunts and tests run in it.
+#    Linux: asks you to install it). Docker: bug hunts and tests run their commands in it;
+#    when missing, setup asks and installs it (macOS: Docker Desktop, signature checked,
+#    license accepted, no window; Linux: Docker's official script), the one step that
+#    needs your password. Then it starts Docker and waits for it.
 # 2. Packages and build (npm ci, npm run build).
 #    Then llama-server, the node's only model engine: the release pinned in
 #    llama-server.pin is downloaded into the data folder, SHA-256 checked, no sudo.
@@ -54,11 +56,7 @@ main() {
   step "Tools"
   ensure_tools
   echo "node $(node --version), npm $(npm --version), $(git --version)"
-  if command -v docker > /dev/null && docker info > /dev/null 2>&1; then
-    echo "docker OK"
-  else
-    warn "Docker is not installed or not running: 'ask' tasks work, bug hunts and tests need it"
-  fi
+  ensure_docker
 
   step "Packages and build"
   (cd "$root" && npm ci --no-audit --no-fund && npm run build)

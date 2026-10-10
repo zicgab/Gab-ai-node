@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NodeConfig, dropUnknownModels } from '../src/config.js';
 import { CATALOG } from '../src/models/catalog.js';
-import { fallbackModel, isVisionModel, modelFor } from '../src/models/pick.js';
+import { deferredKinds, fallbackModel, isVisionModel, modelFor } from '../src/models/pick.js';
 
 const ALL = ['qwen3-coder-30b', 'gpt-oss-120b', 'qwen3-vl-30b'];
 const SMALL = ['qwen3-coder-30b', 'qwen3-vl-30b'];
@@ -16,6 +16,17 @@ describe('catalog', () => {
   });
   it('a vision model has its projector', () => {
     for (const e of CATALOG.filter((x) => x.vision)) expect(e.mmproj?.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('deferredKinds', () => {
+  const kinds = ['ask', 'bug_hunt', 'fix_finding', 'test_web'] as const;
+  it('defers nothing on a node with all three models', () => {
+    expect(deferredKinds(kinds, ['qwen3-coder-30b', 'gpt-oss-120b', 'qwen3-vl-30b'])).toEqual([]);
+  });
+  it('defers the deep kinds on a node without the deep model, and vision kinds without the vision model', () => {
+    expect(deferredKinds(kinds, ['qwen3-coder-30b', 'qwen3-vl-30b'])).toEqual(['bug_hunt', 'fix_finding']);
+    expect(deferredKinds(kinds, ['qwen3-coder-30b'])).toEqual(['bug_hunt', 'fix_finding', 'test_web']);
   });
 });
 

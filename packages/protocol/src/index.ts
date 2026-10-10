@@ -76,6 +76,8 @@ export const ClaimRequest = z.object({
   acceptKinds: z.array(TaskKind).min(1),
   /** Backends configured on this node (anthropic-api needs a key, claude-code the CLI). */
   acceptBackends: z.array(Backend).min(1),
+  /** Kinds this node runs only on a stand-in model; the backend gives them to a better-equipped node first. */
+  deferKinds: z.array(TaskKind).max(50).default([]),
   wait: z.boolean().default(true),
 });
 export type ClaimRequest = z.infer<typeof ClaimRequest>;

@@ -13,7 +13,7 @@ import { allowedKinds, type HealthState } from './health.js';
 import { KeepAwake, pruneMirrors, rotateLogs } from './housekeeping.js';
 import { noModelHost, type ModelHost } from './models/server.js';
 import { log } from './log.js';
-import { fallbackModel, modelFor } from './models/pick.js';
+import { deferredKinds, fallbackModel, modelFor } from './models/pick.js';
 import { pauseFile, reposDir, workDir } from './paths.js';
 import { addWorktree, cleanWorkDir, commitAndPush, syncMirror, type Worktree } from './repos.js';
 import { RetryableError, type TaskContext, type TaskRunner } from './runner.js';
@@ -175,7 +175,8 @@ export class NodeAgent {
       if (backends.length === 0) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
       let res: ClaimResponse;
       try {
-        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: kinds, acceptBackends: backends, wait: true }, this.stopping.signal);
+        const deferKinds = backends.includes('local') ? deferredKinds(kinds, config.models.map((m) => m.id)) : [];
+        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: kinds, acceptBackends: backends, deferKinds, wait: true }, this.stopping.signal);
         backoff = idle;
       } catch (err) {
         if (this.stopping.signal.aborted) break;

@@ -30,5 +30,17 @@ export function fallbackModel(installed: readonly string[]): string | null {
   return CATALOG.find((e) => installed.includes(e.id))?.id ?? null;
 }
 
+/**
+ * Kinds this node would run on a stand-in: the catalog names a model for the kind, but this node has not
+ * installed it (e.g. a bug hunt on a node without gpt-oss-120b). The backend gives these to a node that
+ * has the right model first (ClaimRequest.deferKinds).
+ */
+export function deferredKinds(kinds: readonly TaskKind[], installed: readonly string[]): TaskKind[] {
+  return kinds.filter((k) => {
+    const designated = CATALOG.filter((e) => e.useFor.includes(k));
+    return designated.length > 0 && !designated.some((e) => installed.includes(e.id));
+  });
+}
+
 /** True when the model can read images. */
 export const isVisionModel = (id: string): boolean => CATALOG.some((e) => e.id === id && e.vision === true);

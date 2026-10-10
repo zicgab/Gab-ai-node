@@ -33,12 +33,23 @@ const StreamChunk = z.object({
   usage: z.object({ total_tokens: z.number() }).partial().nullable().optional(),
 });
 
+const UNPARSEABLE_OUTPUT = /does not match the expected|failed to parse/i;
+
 export class OpenAICompatibleBackend implements ModelBackend {
   constructor(private readonly endpoint: string, readonly model: string, private readonly apiKey: string | null = null) {}
 
   async chat(messages: ChatMessage[], tools: ToolSchema[], signal: AbortSignal): Promise<ChatResponse> {
-    const res = await this.post({ model: this.model, messages: wire(messages), tools: tools.length ? tools : undefined, temperature: 0.2 }, signal);
-    const text = await res.text();
+    const body = { model: this.model, messages: wire(messages), tools: tools.length ? tools : undefined, temperature: 0.2 };
+    let res: globalThis.Response;
+    let text: string;
+    // llama-server answers 500 when the model's output does not parse as its chat format
+    // (e.g. a malformed tool call from gpt-oss); sampling again usually gives a valid reply.
+    for (let attempt = 1; ; attempt++) {
+      res = await this.post(body, signal);
+      text = await res.text();
+      if (res.status !== 500 || !UNPARSEABLE_OUTPUT.test(text) || attempt >= 3) break;
+      process.stderr.write(`model ${this.model}: output did not parse, asking again (try ${attempt + 1} of 3)\n`);
+    }
     if (res.status >= 500 || res.status === 429) throw new RetryableError(`model server HTTP ${res.status}: ${text.slice(0, 300)}`);
     if (!res.ok) throw new Error(`model server HTTP ${res.status}: ${text.slice(0, 300)}`);
     const parsed = Response.safeParse(JSON.parse(text));

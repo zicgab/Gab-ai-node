@@ -68,6 +68,31 @@ describe('streaming and partial chat replies', () => {
   });
 });
 
+describe('unparseable model output', () => {
+  it('asks again when llama-server cannot parse the output, and gives up after 3 tries', async () => {
+    let n = 0;
+    const bad = JSON.stringify({ error: { code: 500, message: 'The model produced output that does not match the expected peg-native format' } });
+    const s = await server((_b, res) => { n++; if (n < 3) { res.statusCode = 500; res.end(bad); } else res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })); });
+    try {
+      const r = await new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'hi' }], [], new AbortController().signal);
+      expect(r.message.content).toBe('ok');
+      expect(n).toBe(3);
+      n = -10; // always bad from now on
+      await expect(new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'hi' }], [], new AbortController().signal)).rejects.toThrow(/peg-native/);
+      expect(n).toBe(-7);
+    } finally { s.close(); }
+  });
+
+  it('does not repeat other server errors', async () => {
+    let n = 0;
+    const s = await server((_b, res) => { n++; res.statusCode = 500; res.end('{"error":{"message":"out of memory"}}'); });
+    try {
+      await expect(new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'hi' }], [], new AbortController().signal)).rejects.toThrow(/out of memory/);
+      expect(n).toBe(1);
+    } finally { s.close(); }
+  });
+});
+
 describe('screenshots for vision models', () => {
   it('only a vision model gets the screenshot tool', () => {
     const session = { call: async () => ({}) };

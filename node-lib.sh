@@ -105,7 +105,10 @@ install_docker_linux() {
 
 # ensure_docker: running -> OK; installed -> start it; missing -> ask, install, start.
 ensure_docker() {
-  if docker_up; then echo "docker OK"; return 0; fi
+  if docker_up; then
+    if is_mac; then docker_desktop_quiet; fi # the node may restart it later: never with its window
+    echo "docker OK"; return 0
+  fi
   local installed=0
   if is_mac; then [ -d /Applications/Docker.app ] && installed=1; else command -v docker > /dev/null && installed=1; fi
   if [ $installed -eq 0 ]; then

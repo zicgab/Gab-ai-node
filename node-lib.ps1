@@ -136,7 +136,7 @@ function Install-DockerDesktop {
 
 # Running -> OK; installed -> start it; missing -> ask, install, start.
 function Initialize-Docker {
-  if (Test-DockerUp) { Write-Host "docker OK"; return }
+  if (Test-DockerUp) { Set-DockerDesktopQuiet; Write-Host "docker OK"; return }
   if (-not (Test-Path $DockerDesktopExe)) {
     if (-not [Environment]::UserInteractive) { Warn "Docker is not installed: bug hunts and tests stay off (run setup.ps1 in a terminal to install it)"; return }
     if ((Read-Host "Docker is not installed. Bug hunts and tests need it. Install it now (one admin prompt)? [Y/n]").Trim() -match '^[nN]') {

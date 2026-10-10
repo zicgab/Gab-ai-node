@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { NodeConfig } from '../src/config.js';
-import { createDockerEnsurer, dockerStartCommand } from '../src/docker.js';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createDockerEnsurer, dockerStartCommand, quietDockerDesktop } from '../src/docker.js';
 import { dockerRunning } from '../src/health.js';
 import { applySetting, describeSettings } from '../src/settings.js';
 
@@ -10,6 +13,20 @@ describe('dockerRunning', () => {
     expect(await dockerRunning(fake('27.5.1\n'))).toBe(true);
     expect(await dockerRunning(fake('\n'))).toBe(false);
     expect(await dockerRunning(fake('', 1))).toBe(false);
+  });
+});
+
+describe('quietDockerDesktop', () => {
+  it('turns the Docker Desktop window off and keeps the other settings', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'gab-docker-'));
+    const file = path.join(dir, 'sub', 'settings-store.json');
+    await quietDockerDesktop(file); // no file yet
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ OpenUIOnStartupDisabled: true, AutoStart: true });
+    await writeFile(file, JSON.stringify({ MemoryMiB: 8192, OpenUIOnStartupDisabled: false }));
+    await quietDockerDesktop(file);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ MemoryMiB: 8192, OpenUIOnStartupDisabled: true, AutoStart: true });
+    await writeFile(file, '{ broken');
+    await expect(quietDockerDesktop(file)).rejects.toThrow(/cannot read/);
   });
 });
 

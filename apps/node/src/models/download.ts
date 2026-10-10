@@ -48,6 +48,9 @@ export async function verifyModel(dir: string, e: CatalogEntry): Promise<boolean
   return all;
 }
 
+/** A failure that trying again cannot fix (wrong hash, no disk space, the server refuses): not retried. */
+export class PermanentDownloadError extends Error {}
+
 export interface DownloadOptions {
   /** Replaces the URL of the model's main file (tests). */
   url?: string;
@@ -55,15 +58,35 @@ export interface DownloadOptions {
   /** Progress of the file being downloaded. */
   onProgress?: (doneBytes: number, totalBytes: number, file: string) => void;
   fetchImpl?: typeof fetch;
+  /** Tries per file when the connection drops (default 6); each try resumes from the partial file. */
+  maxAttempts?: number;
+  /** Called before a retry, with the error and the wait in ms (default: a line on stderr). */
+  onRetry?: (file: string, err: Error, attempt: number, waitMs: number) => void;
+  /** Wait before try n+1 in ms (default 2 s doubling, at most 30 s); tests use 0. */
+  backoffMs?: (attempt: number) => number;
 }
 
 export async function downloadModel(dir: string, e: CatalogEntry, opts: DownloadOptions = {}): Promise<'already-installed' | 'downloaded'> {
   let downloaded = false;
   for (const f of catalogFiles(e)) {
     const url = f.file === e.file ? opts.url ?? downloadUrl(e) : downloadUrl(e, f.file);
-    if (await downloadFile(dir, e.id, f, url, opts) === 'downloaded') downloaded = true;
+    if (await downloadWithRetry(dir, e.id, f, url, opts) === 'downloaded') downloaded = true;
   }
   return downloaded ? 'downloaded' : 'already-installed';
+}
+
+/** A dropped connection ("terminated", reset, 5xx) resumes from the partial file; permanent failures and cancellation stop at once. */
+async function downloadWithRetry(dir: string, id: string, f: PinnedFile, url: string, opts: DownloadOptions): Promise<'already-installed' | 'downloaded'> {
+  const max = opts.maxAttempts ?? 6;
+  for (let attempt = 1; ; attempt++) {
+    try { return await downloadFile(dir, id, f, url, opts); }
+    catch (err) {
+      if (err instanceof PermanentDownloadError || opts.signal?.aborted || attempt >= max) throw err;
+      const wait = (opts.backoffMs ?? ((n) => Math.min(30_000, 2_000 * 2 ** (n - 1))))(attempt);
+      (opts.onRetry ?? ((file, e, n, ms) => process.stderr.write(`\n${id}: ${file}: ${e.message}; retrying in ${Math.round(ms / 1000)} s (try ${n + 1} of ${max}), resuming where it stopped\n`)))(f.file, err as Error, attempt, wait);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 async function downloadFile(dir: string, id: string, f: PinnedFile, url: string, opts: DownloadOptions): Promise<'already-installed' | 'downloaded'> {
@@ -80,7 +103,7 @@ async function downloadFile(dir: string, id: string, f: PinnedFile, url: string,
   const free = fs.bavail * fs.bsize;
   const need = f.sizeBytes - have;
   if (free < need + 1024 ** 3) {
-    throw new Error(`not enough disk space for ${id}: need ${gb(need)} GB + 1 GB margin, ${gb(free)} GB free in ${dir}`);
+    throw new PermanentDownloadError(`not enough disk space for ${id}: need ${gb(need)} GB + 1 GB margin, ${gb(free)} GB free in ${dir}`);
   }
 
   const hash = have > 0 ? await hashFile(part) : createHash('sha256');
@@ -93,7 +116,10 @@ async function downloadFile(dir: string, id: string, f: PinnedFile, url: string,
     // Server ignored the range: start over.
     return restart();
   }
-  if (res.status !== 200 && res.status !== 206) throw new Error(`download of ${id} (${f.file}) failed: HTTP ${res.status}`);
+  if (res.status !== 200 && res.status !== 206) {
+    const msg = `download of ${id} (${f.file}) failed: HTTP ${res.status}`;
+    throw res.status >= 500 || res.status === 429 ? new Error(msg) : new PermanentDownloadError(msg);
+  }
   if (!res.body) throw new Error(`download of ${id} (${f.file}) failed: empty body`);
   await stream(res.body, hash, have);
   return finish(hash);
@@ -102,7 +128,7 @@ async function downloadFile(dir: string, id: string, f: PinnedFile, url: string,
     await rm(part, { force: true });
     const fresh = createHash('sha256');
     const again = await (opts.fetchImpl ?? fetch)(url, { redirect: 'follow', signal: opts.signal });
-    if (again.status !== 200 || !again.body) throw new Error(`download of ${id} (${f.file}) failed: HTTP ${again.status}`);
+    if (again.status !== 200 || !again.body) throw again.status >= 500 || again.status === 429 ? new Error(`download of ${id} (${f.file}) failed: HTTP ${again.status}`) : new PermanentDownloadError(`download of ${id} (${f.file}) failed: HTTP ${again.status}`);
     await stream(again.body, fresh, 0);
     return finish(fresh);
   }
@@ -117,7 +143,7 @@ async function downloadFile(dir: string, id: string, f: PinnedFile, url: string,
           const buf = chunk as Buffer;
           h.update(buf);
           done += buf.length;
-          if (done > f.sizeBytes) throw new Error(`download of ${id} (${f.file}) is larger than the pinned ${f.sizeBytes} bytes`);
+          if (done > f.sizeBytes) throw new PermanentDownloadError(`download of ${id} (${f.file}) is larger than the pinned ${f.sizeBytes} bytes`);
           if (opts.onProgress && (done - lastReport > 64 * 1024 ** 2 || done === f.sizeBytes)) { lastReport = done; opts.onProgress(done, f.sizeBytes, f.file); }
           yield buf;
         }
@@ -132,7 +158,7 @@ async function downloadFile(dir: string, id: string, f: PinnedFile, url: string,
     const digest = h.digest('hex');
     if (size !== f.sizeBytes || digest !== f.sha256) {
       await rm(part, { force: true });
-      throw new Error(`download of ${id} (${f.file}) rejected: got ${size} bytes sha256 ${digest}, expected ${f.sizeBytes} bytes sha256 ${f.sha256}`);
+      throw new PermanentDownloadError(`download of ${id} (${f.file}) rejected: got ${size} bytes sha256 ${digest}, expected ${f.sizeBytes} bytes sha256 ${f.sha256}`);
     }
     await rename(part, file);
     await writeFile(markerOf(dir, f), f.sha256);

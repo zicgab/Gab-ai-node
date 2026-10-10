@@ -81,6 +81,53 @@ describe('downloadModel', () => {
     expect((await readFile(modelPath(dir, entry))).equals(body)).toBe(true);
   });
 
+  it('resumes by itself when the connection drops mid-download', async () => {
+    const dir = await tmp();
+    const calls: (string | undefined)[] = [];
+    const flaky = (async (u: string, init?: RequestInit) => {
+      const range = (init?.headers as Record<string, string> | undefined)?.range;
+      calls.push(range);
+      const from = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
+      if (calls.length === 1) {
+        // First try: 120 kB arrive, then the connection dies ("terminated").
+        let sent = false;
+        const stream = new ReadableStream<Uint8Array>({
+          pull(c) {
+            if (!sent) { sent = true; c.enqueue(body.subarray(0, 120_000)); return; }
+            return new Promise((_, reject) => setTimeout(() => { const e = new TypeError('terminated'); c.error(e); reject(e); }, 50));
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }
+      return new Response(body.subarray(from), { status: from ? 206 : 200 });
+    }) as unknown as typeof fetch;
+    const retries: string[] = [];
+    expect(await downloadModel(dir, entry, { fetchImpl: flaky, backoffMs: () => 0, onRetry: (_f, err) => retries.push(err.message) })).toBe('downloaded');
+    expect(retries).toEqual(['terminated']);
+    expect(calls[0]).toBeUndefined();
+    expect(calls[1]).toMatch(/^bytes=[1-9]\d*-$/); // asked only for what was missing
+    expect((await readFile(modelPath(dir, entry))).equals(body)).toBe(true);
+  });
+
+  it('gives up after the allowed tries and keeps the partial file for the next run', async () => {
+    const dir = await tmp();
+    const dead = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
+    await expect(downloadModel(dir, entry, { fetchImpl: dead, maxAttempts: 3, backoffMs: () => 0, onRetry: () => {} })).rejects.toThrow('fetch failed');
+  });
+
+  it('does not retry a refusal or a wrong hash', async () => {
+    const dir = await tmp();
+    let calls = 0;
+    const refused = (async () => { calls++; return new Response('no', { status: 404 }); }) as unknown as typeof fetch;
+    await expect(downloadModel(dir, entry, { fetchImpl: refused, backoffMs: () => 0 })).rejects.toThrow(/HTTP 404/);
+    expect(calls).toBe(1);
+    const bad = { ...entry, sha256: 'f'.repeat(64) };
+    calls = 0;
+    const ok = (async () => { calls++; return new Response(body, { status: 200 }); }) as unknown as typeof fetch;
+    await expect(downloadModel(dir, bad, { fetchImpl: ok, backoffMs: () => 0 })).rejects.toThrow(/rejected/);
+    expect(calls).toBe(1);
+  });
+
   it('rejects a file whose hash does not match the pin and leaves nothing behind', async () => {
     const dir = await tmp();
     const bad = { ...entry, sha256: 'f'.repeat(64) };

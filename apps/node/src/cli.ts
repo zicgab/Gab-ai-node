@@ -145,7 +145,13 @@ async function main(): Promise<void> {
       return;
     case 'status': {
       const config = await loadConfig();
-      console.log(JSON.stringify({ name: config.name, backend: config.coordinatorUrl, locallyPaused: existsSync(pauseFile()), dataDir: dataDir(), models: config.models.map((m) => m.id) }, null, 2));
+      // Registered = a config AND the node's token (retire deletes the token but keeps the config). setup.sh / setup.ps1 rely on the exit code.
+      const registered = Boolean(await defaultStore().get('NODE_TOKEN'));
+      console.log(JSON.stringify({ name: config.name, backend: config.coordinatorUrl, registered, locallyPaused: existsSync(pauseFile()), dataDir: dataDir(), models: config.models.map((m) => m.id) }, null, 2));
+      if (!registered) {
+        console.error('This node has a config but no token (it was retired or the key store was cleared): run "gab-node register" again, or: bash setup.sh --register');
+        process.exitCode = 1;
+      }
       return;
     }
     default:

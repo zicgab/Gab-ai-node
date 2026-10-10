@@ -42,8 +42,13 @@ export function allowedKinds(kinds: TaskKind[], state: HealthState, dockerKinds:
   return { kinds: left, reason: left.length < kinds.length ? 'Docker not running: kinds that run commands are held back' : null };
 }
 
-export async function dockerRunning(): Promise<boolean> {
-  return (await exec('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 15_000 })).code === 0;
+/**
+ * True when the Docker daemon answers. `docker info --format` exits 0 with an empty line when the
+ * daemon is down, so the server version must actually come back.
+ */
+export async function dockerRunning(run: typeof exec = exec): Promise<boolean> {
+  const r = await run('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 15_000 });
+  return r.code === 0 && r.stdout.trim() !== '';
 }
 
 /** The node starts llama-server per task: it is enough that the installed program is there. */

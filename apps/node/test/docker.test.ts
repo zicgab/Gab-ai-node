@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { NodeConfig } from '../src/config.js';
 import { createDockerEnsurer, dockerStartCommand } from '../src/docker.js';
+import { dockerRunning } from '../src/health.js';
 import { applySetting, describeSettings } from '../src/settings.js';
+
+describe('dockerRunning', () => {
+  it('needs the server version: docker info --format exits 0 with an empty line when the daemon is down', async () => {
+    const fake = (stdout: string, code = 0) => (async () => ({ code, stdout, stderr: '' })) as never;
+    expect(await dockerRunning(fake('27.5.1\n'))).toBe(true);
+    expect(await dockerRunning(fake('\n'))).toBe(false);
+    expect(await dockerRunning(fake('', 1))).toBe(false);
+  });
+});
 
 describe('dockerStartCommand', () => {
   it('starts Docker Desktop in the background on macOS, without a window', () => {

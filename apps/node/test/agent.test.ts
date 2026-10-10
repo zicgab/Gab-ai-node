@@ -144,6 +144,23 @@ describe('runAgent', () => {
     expect(events.map((e) => e.step)).toEqual([41, 41, 42]);
   });
 
+  it('drops the oldest tool outputs when the conversation nears the window, and lets the model read them again', async () => {
+    const big = (name: string): ToolDef & { runs: Record<string, number> } => {
+      const t = { name, description: name, parameters: { type: 'object', properties: {} }, runs: {} as Record<string, number>,
+        async run(args: Record<string, unknown>) { const p = String(args.path); t.runs[p] = (t.runs[p] ?? 0) + 1; return `${p}:` + 'x'.repeat(9_000); } };
+      return t;
+    };
+    const read = big('read_file');
+    const backend = scripted([...['a', 'b', 'c', 'd', 'a'].map((p, i) => call('read_file', { path: p }, `c${i}`)), { content: 'done' }]);
+    const run = await runAgent({ ...base, backend, tools: [read], maxSteps: 10, contextTokens: 8_000 });
+    const lastSeen = backend.seen.at(-1)!;
+    const outputs = lastSeen.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(outputs.some((o) => o.startsWith('[earlier output of read_file') && o.includes('removed to save space'))).toBe(true);
+    expect(outputs.at(-1)).toMatch(/^a:x/); // the newest output is whole
+    expect(read.runs.a).toBe(2); // a was dropped, so reading it again is not a "repeat"
+    expect(run.stoppedBy).toBe('answer');
+  });
+
   it('stops on abort', async () => {
     const ac = new AbortController(); ac.abort();
     await expect(runAgent({ ...base, signal: ac.signal, backend: scripted([{ content: 'x' }]), tools: [], maxSteps: 3 })).rejects.toThrow();

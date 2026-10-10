@@ -22,6 +22,35 @@ const STOP_AFTER_REPEATS = 6;
 /** How often a too-early answer is sent back (then it is accepted, a small repo may really have few files). */
 const MAX_COVERAGE_NUDGES = 2;
 
+/**
+ * The model's window is 65,536 tokens and every tool output stays in the conversation, so a long
+ * run overflows it (two hunts died with HTTP 400 at 65,550 and 68,045 tokens). Past this estimate the
+ * oldest outputs are replaced by a one-line note; the model can make the call again.
+ */
+const CONTEXT_SOFT_LIMIT = 40_000;
+const KEEP_RECENT_OUTPUTS = [6, 3, 1];
+const TRIMMED = '[earlier output of';
+const IMAGE_TOKENS = 1_500;
+const roughTokens = (m: ChatMessage) => Math.ceil(((m.content ?? '').length + JSON.stringify(m.tool_calls ?? []).length) / 3) + (m.images?.length ?? 0) * IMAGE_TOKENS;
+
+/** Drops the oldest tool outputs (keeping the newest few) until the conversation fits; returns the ids of the calls it dropped. */
+function trimOutputs(messages: ChatMessage[], limit: number, describe: Map<string, string>): string[] {
+  const total = () => messages.reduce((n, m) => n + roughTokens(m), 0);
+  const dropped: string[] = [];
+  if (total() <= limit) return dropped;
+  for (const keep of KEEP_RECENT_OUTPUTS) {
+    const outputs = messages.flatMap((m, i) => (m.role === 'tool' && !(m.content ?? '').startsWith(TRIMMED) ? [i] : []));
+    for (const i of outputs.slice(0, Math.max(0, outputs.length - keep))) {
+      const m = messages[i]!;
+      const id = m.tool_call_id ?? '';
+      messages[i] = { ...m, content: `${TRIMMED} ${describe.get(id) ?? 'a tool'}] removed to save space; call it again if you need it.` };
+      dropped.push(id);
+      if (total() <= limit) return dropped;
+    }
+  }
+  return dropped;
+}
+
 const callKey = (name: string, args: Record<string, unknown>) => `${name} ${JSON.stringify(Object.entries(args).sort(([a], [b]) => a.localeCompare(b)))}`;
 
 export async function runAgent(opts: {
@@ -37,13 +66,24 @@ export async function runAgent(opts: {
   minFilesRead?: number;
   /** Added to the step number in the events, for a task that runs the loop several times. */
   stepBase?: number;
+  /** Estimated conversation size (tokens) past which the oldest tool outputs are dropped. */
+  contextTokens?: number;
 }): Promise<AgentRun> {
   const schemas: ToolSchema[] = opts.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
   const byName = new Map(opts.tools.map((t) => [t.name, t]));
   const messages: ChatMessage[] = [{ role: 'system', content: opts.system }, { role: 'user', content: opts.user }];
   const seenReads = new Map<string, number>();
   const filesRead = new Set<string>();
+  const describe = new Map<string, string>();
+  const keyOfCall = new Map<string, string>();
   const shown = (step: number) => step + (opts.stepBase ?? 0);
+  /** Keeps the conversation inside the model's window; a dropped read may be repeated again. */
+  const fit = () => {
+    for (const id of trimOutputs(messages, opts.contextTokens ?? CONTEXT_SOFT_LIMIT, describe)) {
+      const key = keyOfCall.get(id);
+      if (key) seenReads.delete(key);
+    }
+  };
   let tokens = 0;
   let repeatSteps = 0;
   let coverageNudges = 0;
@@ -52,6 +92,7 @@ export async function runAgent(opts: {
     opts.signal.throwIfAborted();
     const last = step === opts.maxSteps;
     if (last) messages.push({ role: 'user', content: 'Step budget reached: answer now with what you found, without calling tools.' });
+    fit();
     const res = await opts.backend.chat(messages, last ? [] : schemas, opts.signal);
     tokens += res.tokens;
     messages.push(res.message);
@@ -79,6 +120,8 @@ export async function runAgent(opts: {
         args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
         if (!tool) throw new Error(`unknown tool ${call.function.name}`);
         const key = callKey(tool.name, args);
+        describe.set(call.id, `${tool.name} ${JSON.stringify(args).slice(0, 100)}`);
+        keyOfCall.set(call.id, key);
         const before = REPEATABLE.has(tool.name) ? seenReads.get(key) : undefined;
         if (before !== undefined) {
           repeated = true;
@@ -109,6 +152,7 @@ export async function runAgent(opts: {
     repeatSteps = allRepeats ? repeatSteps + 1 : 0;
     if (repeatSteps >= STOP_AFTER_REPEATS) {
       messages.push({ role: 'user', content: 'You keep repeating calls you already made. Stop and write the final report now with what you have, without calling tools.' });
+      fit();
       const final = await opts.backend.chat(messages, [], opts.signal);
       tokens += final.tokens;
       return { answer: (final.message.content ?? '').trim() || '(no answer)', steps: step + 1, tokens, stoppedBy: 'repeating', filesRead: filesRead.size };
@@ -118,6 +162,7 @@ export async function runAgent(opts: {
     }
     if (tokens >= opts.maxTokens) {
       messages.push({ role: 'user', content: 'Token budget reached: answer now with what you found, without calling tools.' });
+      fit();
       const final = await opts.backend.chat(messages, [], opts.signal);
       tokens += final.tokens;
       return { answer: (final.message.content ?? '').trim() || '(no answer)', steps: step + 1, tokens, stoppedBy: 'tokens', filesRead: filesRead.size };

@@ -167,6 +167,10 @@ A local model fails in two ways, so the loop guards against both:
 - **Repeating itself.** The same read (`read_file`, `list_dir`, `grep`, `search_code`) with the same arguments is not run again: the model is told it already has the result. Three steps in a row of only repeats add a nudge, six force the final report (`stoppedBy: repeating`). A write or a command lets earlier reads be repeated again. (The first real scan ran one `grep` 43 times and used its whole token budget without a report.)
 - **Concluding after a quick look.** A bug hunt that answers after opening fewer than 12 files with `read_file` is sent back (twice at most). Its summary says how many files it read (`0 finding(s), 31 file(s) read`) and the report lists the files it reviewed: "0 findings" only means something next to that.
 
+- **Overflowing the window.** Models run with a 65,536-token window and every tool output stays in the conversation. Past an estimated 40,000 tokens the oldest outputs (all but the newest 6, then 3, then 1) are replaced by a one-line note; the model can make that call again (the repeat guard lets it). Without this, two long hunts died with HTTP 400 "exceeds the available context size".
+
+A bug hunt must also read the whole file and search for the protection (limiter, auth or ownership check, validation) before reporting it missing, and calls something high only when it showed the attacker's path: in the first real runs 9 of 14 auth findings were protections the model had not looked for.
+
 A bug hunt accepts code-reading evidence (the quoted line at file:line and the path to the bad result), not only a failing test, and changes files only when the task asks for fixes.
 
 `scan` reviews its candidates 10 at a time, most severe first, each batch in a fresh conversation with a share of the task budget (each step re-sends the whole conversation, so one long conversation cannot fit 200 candidates). The summary lists the candidates the budget did not reach.

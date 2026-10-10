@@ -140,8 +140,8 @@ install_service() {
   <key>StandardErrorPath</key><string>$(data_dir)/logs/launchd.log</string>
 </dict></plist>
 EOF
-    launchctl bootout "gui/$(id -u)/$LAUNCHD_LABEL" > /dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchd refused $plist"
+    launchd_unload
+    launchd_load "$plist" || die "launchd refused $plist (see: launchctl print gui/$(id -u)/$LAUNCHD_LABEL)"
     echo "LaunchAgent $LAUNCHD_LABEL started (logs: $(data_dir)/logs)"
   else
     command -v systemctl > /dev/null || die "systemd is needed for the automatic start (or run: bash setup.sh --no-service, and start run-node.sh yourself)"
@@ -194,9 +194,30 @@ enable_linger() {
   warn "linger is off: the node stops when you log out and does not start at boot. Fix: sudo loginctl enable-linger $user"
 }
 
+# bootout returns before the node has stopped (it shuts its model servers down first);
+# a bootstrap meanwhile fails with "5: Input/output error". Wait until launchd lets go.
+launchd_unload() {
+  local target="gui/$(id -u)/$LAUNCHD_LABEL" i
+  launchctl bootout "$target" > /dev/null 2>&1 || return 0
+  for i in $(seq 1 30); do
+    launchctl print "$target" > /dev/null 2>&1 || return 0
+    sleep 1
+  done
+  warn "the node did not stop within 30 s"
+}
+
+launchd_load() {
+  local i
+  for i in 1 2 3 4 5; do
+    launchctl bootstrap "gui/$(id -u)" "$1" 2> /dev/null && return 0
+    sleep 2
+  done
+  launchctl bootstrap "gui/$(id -u)" "$1"
+}
+
 stop_service() {
   if is_mac; then
-    launchctl bootout "gui/$(id -u)/$LAUNCHD_LABEL" > /dev/null 2>&1 || true
+    launchd_unload
   else
     systemctl --user stop "$SYSTEMD_UNIT" > /dev/null 2>&1 || true
   fi
@@ -205,7 +226,7 @@ stop_service() {
 start_service() {
   if is_mac; then
     local plist="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
-    [ -f "$plist" ] && launchctl bootstrap "gui/$(id -u)" "$plist"
+    [ -f "$plist" ] && launchd_load "$plist"
   else
     systemctl --user start "$SYSTEMD_UNIT" > /dev/null 2>&1 || true
   fi

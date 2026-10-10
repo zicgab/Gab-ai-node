@@ -43,9 +43,10 @@ export class OpenAICompatibleBackend implements ModelBackend {
     let res: globalThis.Response;
     let text: string;
     // llama-server answers 500 when the model's output does not parse as its chat format
-    // (e.g. a malformed tool call from gpt-oss); sampling again usually gives a valid reply.
+    // (e.g. a malformed tool call from gpt-oss). At 0.2 the same prompt tends to repeat the same
+    // output, so retries sample at 1.0 (OpenAI's recommended setting for gpt-oss) with a new seed.
     for (let attempt = 1; ; attempt++) {
-      res = await this.post(body, signal);
+      res = await this.post(attempt === 1 ? body : { ...body, temperature: 1, seed: Math.floor(Math.random() * 2 ** 31) }, signal);
       text = await res.text();
       if (res.status !== 500 || !UNPARSEABLE_OUTPUT.test(text) || attempt >= 3) break;
       process.stderr.write(`model ${this.model}: output did not parse, asking again (try ${attempt + 1} of 3)\n`);

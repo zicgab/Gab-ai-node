@@ -77,6 +77,8 @@ describe('unparseable model output', () => {
       const r = await new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'hi' }], [], new AbortController().signal);
       expect(r.message.content).toBe('ok');
       expect(n).toBe(3);
+      expect(s.bodies.map((b) => b.temperature)).toEqual([0.2, 1, 1]);
+      expect(s.bodies[1]!.seed).not.toBe(s.bodies[2]!.seed);
       n = -10; // always bad from now on
       await expect(new OpenAICompatibleBackend(s.url, 'm').chat([{ role: 'user', content: 'hi' }], [], new AbortController().signal)).rejects.toThrow(/peg-native/);
       expect(n).toBe(-7);

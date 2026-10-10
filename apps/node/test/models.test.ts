@@ -4,9 +4,11 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CATALOG, downloadUrl, type CatalogEntry } from '../src/models/catalog.js';
 import { downloadModel, isInstalled, mmprojPath, modelPath, verifyModel } from '../src/models/download.js';
+import { NodeConfig } from '../src/config.js';
+import { installedIds, setupModels } from '../src/models/commands.js';
 import { LlamaServerHost, type HostedModel } from '../src/models/server.js';
 import { RetryableError } from '../src/runner.js';
 
@@ -94,6 +96,38 @@ describe('downloadModel', () => {
     await writeFile(modelPath(dir, entry), corrupted);
     expect(await verifyModel(dir, entry)).toBe(false);
     expect(await isInstalled(dir, entry)).toBe(false);
+  });
+});
+
+describe('setupModels (the installer step)', () => {
+  const run = async (budgetMb: number, ifMissing = false) => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { lines.push(a.join(' ')); });
+    try {
+      const config = NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node', memoryBudgetMb: budgetMb });
+      await setupModels(config, await tmp(), ifMissing);
+      return { text: lines.join('\n'), config };
+    } finally { spy.mockRestore(); }
+  };
+
+  it('without a terminal shows the models, downloads nothing and says how to pull them later', async () => {
+    const { text, config } = await run(96 * 1024);
+    expect(text).toMatch(/qwen3-coder-30b.*can run here/);
+    expect(text).toMatch(/gpt-oss-120b.*can run here/);
+    expect(text).toMatch(/qwen3-vl-30b.*can run here/);
+    expect(text).toMatch(/gab-node models pull --all/);
+    expect(installedIds(config)).toEqual([]);
+  });
+
+  it('marks the models a small machine cannot run, and says tasks fall back to the installed ones', async () => {
+    const { text } = await run(48 * 1024);
+    expect(text).toMatch(/gpt-oss-120b.*too big for this machine/);
+    expect(text).toMatch(/Not used on this machine: gpt-oss-120b/);
+    expect(text).toMatch(/qwen3-coder-30b.*can run here/);
+  });
+
+  it('--if-missing still speaks up on a node with no model at all', async () => {
+    expect((await run(96 * 1024, true)).text).toMatch(/gab-node models pull --all/);
   });
 });
 

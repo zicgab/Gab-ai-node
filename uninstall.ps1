@@ -29,22 +29,13 @@ Remove-Task
 Remove-Command $root
 Write-Host "removed"
 
-# Models the node downloaded through Ollama (never ones you had before): optional, they can be tens of GB.
-$pulled = Join-Path (Get-DataDir) "ollama-pulled.txt"
-if ((Test-Path $pulled) -and (Get-Command ollama -ErrorAction SilentlyContinue)) {
-  $tags = @(Get-Content $pulled | Where-Object { $_ })
-  if ($tags.Count) {
-    Step "Models downloaded by this node"
-    $tags | ForEach-Object { Write-Host "  $_" }
-    $a = Read-Host "Remove these from Ollama too? Other apps using them lose them [y/N]"
-    if ($a -match '^(y|yes)$') {
-      foreach ($t in $tags) {
-        & ollama rm $t
-        if ($LASTEXITCODE -eq 0) { Write-Host "removed $t" } else { Write-Host "could not remove $t (is Ollama running?): ollama rm $t" -ForegroundColor Yellow }
-      }
-      Remove-Item -Force $pulled
-    } else { Write-Host "models kept (later: ollama rm <name>)" }
-  }
+# The models the node downloaded (tens of GB): kept unless you say so, so a reinstall does not download them again.
+$models = Join-Path (Get-DataDir) "models"
+if ((-not $Purge) -and (Test-Path $models) -and (Get-ChildItem $models -Force | Select-Object -First 1)) {
+  Step "Downloaded models"
+  $gb = [math]::Round((Get-ChildItem $models -Recurse -File | Measure-Object Length -Sum).Sum / 1GB, 1)
+  $a = Read-Host "Delete the models in $models ($gb GB)? [y/N]"
+  if ($a -match '^(y|yes)$') { Remove-Item -Recurse -Force $models; Write-Host "models removed" } else { Write-Host "models kept" }
 }
 
 if ($Purge) {

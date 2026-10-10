@@ -170,9 +170,12 @@ export class NodeAgent {
         await sleep(idle, this.stopping.signal);
         continue;
       }
+      // Local tasks need an installed model: without one, only the other backends (Anthropic API, Claude Code) are offered.
+      const backends = config.backends.filter((b) => b !== 'local' || fallback !== null);
+      if (backends.length === 0) { await sleep(Math.max(idle, 30_000), this.stopping.signal); continue; }
       let res: ClaimResponse;
       try {
-        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: kinds, acceptBackends: config.backends, wait: true }, this.stopping.signal);
+        res = await this.d.client.claim({ acceptModels: fit, acceptKinds: kinds, acceptBackends: backends, wait: true }, this.stopping.signal);
         backoff = idle;
       } catch (err) {
         if (this.stopping.signal.aborted) break;

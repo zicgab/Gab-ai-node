@@ -116,7 +116,7 @@ describe('NodeAgent claims only what it can run', () => {
     const runner = { kinds: ['ask', 'bug_hunt'] as TaskKind[], run: async () => { throw new Error('no task expected'); } };
     const root = await tmp('gab-loop-');
     const agent = new NodeAgent({
-      config: NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node' }),
+      config: NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node', models: [{ id: 'qwen3-coder-30b', memoryMb: 1 }] }),
       client: client as never, runners: [runner], capabilities: async () => ({}) as never, secrets: { github: null, anthropic: null },
       reposRoot: path.join(root, 'repos'), workRoot: path.join(root, 'work'), isLocallyPaused: () => false, idleMs: 5,
       health: async () => ({ docker: false, model, freeDiskMb: null }), dockerKinds: new Set<TaskKind>(['bug_hunt']),
@@ -131,6 +131,36 @@ describe('NodeAgent claims only what it can run', () => {
     await new Promise((r) => setTimeout(r, 80));
     await agent.stop();
     expect(claims.length - before).toBeLessThanOrEqual(1); // at most the claim already in flight
+  });
+});
+
+describe('NodeAgent without an installed model', () => {
+  const run = async (backends: string[]) => {
+    const { NodeAgent } = await import('../src/loop.js');
+    const { NodeConfig } = await import('../src/config.js');
+    const claims: string[][] = [];
+    const client = { claim: async (req: { acceptBackends: string[] }) => { claims.push(req.acceptBackends); return { available: true, task: null, leaseId: null, github: null }; } };
+    const root = await tmp('gab-loop-');
+    const agent = new NodeAgent({
+      config: NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node', backends }),
+      client: client as never, runners: [{ kinds: ['ask'] as TaskKind[], run: async () => { throw new Error('no task expected'); } }], capabilities: async () => ({}) as never,
+      secrets: { github: null, anthropic: null }, reposRoot: path.join(root, 'repos'), workRoot: path.join(root, 'work'), isLocallyPaused: () => false, idleMs: 5,
+      keepAwake: new KeepAwake('linux'),
+    });
+    await agent.start();
+    await new Promise((r) => setTimeout(r, 60));
+    await agent.stop();
+    return claims;
+  };
+
+  it('does not claim local tasks (they would only fail)', async () => {
+    expect(await run(['local'])).toEqual([]);
+  });
+
+  it('still offers the backends that need no model', async () => {
+    const claims = await run(['local', 'claude-code']);
+    expect(claims.length).toBeGreaterThan(0);
+    expect(new Set(claims.flat())).toEqual(new Set(['claude-code']));
   });
 });
 

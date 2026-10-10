@@ -17,8 +17,10 @@ connected to the backend. As the user that will run the node, not as root:
 
 It asks for the **node key** (backend `NODE_API_KEY`; used once, never saved),
 downloads the code into `~/gab-ai-node` (`%USERPROFILE%\gab-ai-node`), builds
-it, registers the machine, and installs the automatic start (launchd,
-systemd user service, or a scheduled task). A new node starts **paused**: allow
+it, installs the pinned `llama-server` (the node's only model engine; nothing else
+like Ollama is needed), registers the machine, installs the automatic start (launchd,
+systemd user service, or a scheduled task), and lists the node's three models with
+what this machine can run: it asks before downloading them (tens of GB). A new node starts **paused**: allow
 it from MCP (`set_node_availability`).
 
 Stopped halfway: `bash setup.sh` / `.\setup.ps1` in that folder (safe to re-run).

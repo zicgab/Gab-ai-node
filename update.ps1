@@ -68,6 +68,9 @@ try {
   Remove-Item -Recurse -Force $old
   Start-Node
   Write-Host "updated to $($sha.Substring(0, 7)); the node runs again"
+  # Models this machine can run but does not have yet (also the first update from a version that used Ollama): asks before downloading.
+  try { & node (Join-Path $root "apps\node\dist\cli.js") models setup --if-missing; if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" } }
+  catch { Write-Host "the model step did not finish (not fatal): run 'gab-node models setup' later: $_" -ForegroundColor Yellow }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

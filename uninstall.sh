@@ -6,7 +6,7 @@
 # 1. Tells the backend (gab-node retire): the tasks this node holds go back to
 #    the queue and the node is turned off, so its token stops working.
 # 2. Stops and removes the automatic start and the gab-node command.
-# 3. Optionally removes the models it downloaded through Ollama (asks; only those).
+# 3. Asks whether to delete the models it downloaded (tens of GB; kept by default).
 # --purge also deletes the data folder (config, secrets file on Linux, repo
 # mirrors, models: models can be many GB). It also asks whether to delete this
 # code folder (--remove-code: yes, without asking; the installer uses it to reinstall).
@@ -39,21 +39,16 @@ main() {
   remove_command
   echo "removed"
 
-  # Models the node downloaded through Ollama (never ones you had before): optional, they can be tens of GB.
-  local pulled tag
-  pulled="$(data_dir)/ollama-pulled.txt"
-  if [ -s "$pulled" ] && command -v ollama > /dev/null; then
-    step "Models downloaded by this node"
-    sed 's/^/  /' "$pulled"
-    answer=$(ask "Remove these from Ollama too? Other apps using them lose them [y/N]")
+  # The models the node downloaded (tens of GB): kept unless you say so, so a reinstall does not download them again.
+  local models size
+  models="$(data_dir)/models"
+  if [ "$purge" = 0 ] && [ -d "$models" ] && [ -n "$(ls -A "$models" 2> /dev/null)" ]; then
+    step "Downloaded models"
+    size=$(du -sh "$models" 2> /dev/null | cut -f1)
+    answer=$(ask "Delete the models in $models ($size)? [y/N]")
     case $answer in
-      y | Y | yes)
-        while IFS= read -r tag; do
-          [ -n "$tag" ] || continue
-          if ollama rm "$tag"; then echo "removed $tag"; else warn "could not remove $tag (is Ollama running?): ollama rm $tag"; fi
-        done < "$pulled"
-        rm -f "$pulled" ;;
-      *) echo "models kept (later: ollama rm <name>)" ;;
+      y | Y | yes) rm -rf "$models"; echo "models removed" ;;
+      *) echo "models kept" ;;
     esac
   fi
 

@@ -142,13 +142,25 @@ evidence (they become findings, with `seen_count`). It never changes the repo an
   `press`, `wait`, `problems`) implemented by `apps/node/assets/web-driver.mjs`; it never writes browser code.
 - Image `config.sandbox.webImage` (default `mcr.microsoft.com/playwright:v1.48.2-jammy`, pinned by digest in `IMAGES`, apps/node/src/config.ts) must match
   `PLAYWRIGHT_VERSION` in `agent/web-runner.ts`.
-- Pick a model for it: `gab-node models use test_web <model-id>`.
-- A model that can see images (`visionModels`, set by `gab-node models detect` from Ollama's capabilities) also
-  gets `screenshot`: the image goes to the model, only the newest one stays in the conversation. Useful for `uxui`.
+- It runs on the vision model (`qwen3-vl-30b`) when the node has it, which also gets `screenshot`: the image goes
+  to the model, only the newest one stays in the conversation. Useful for `uxui`. Without it, the fast model
+  drives the page from the page text only.
 
-### Model per role or kind
-`gab-node models use security <id>` / `... custom <id>` / `... --clear`. Order: the task's own `model`,
-then the node's model for its role, then for its kind, then `defaultModel`.
+### Model per task
+The node knows exactly three models (`apps/node/src/models/catalog.ts`) and nothing else; no per-node choice, no
+external model servers (Ollama, LM Studio, vLLM are not used). Which one serves what is fixed in the catalog
+(`useFor`) and resolved by `models/pick.ts`:
+
+| Model | Serves | Download | Memory |
+|---|---|---|---|
+| `qwen3-coder-30b` | `ask`, `chat`, `translate`, `custom`, `contract_check`, `test_mobile`, roles frontend / backend | 17 GB | 24 GB |
+| `gpt-oss-120b` | `bug_hunt`, `fix_finding`, `scan`, `docs_check`, roles security / uxui | 59 GB | 70 GB |
+| `qwen3-vl-30b` | `test_web`, `test_electron` (reads screenshots; model + `mmproj` file) | 18 GB | 26 GB |
+
+Order: the model the task names (only one of these three), then the vision model for screenshot tasks, then the
+model for the task's role, then for its kind, then the first installed model. A node installs only the models that
+fit its memory budget (`memoryBudgetMb`, default 75% of RAM): on a 64 GB machine `gpt-oss-120b` does not fit, so
+deep tasks run on `qwen3-coder-30b` (lower quality, accepted). A node with no model installed claims no local task.
 
 ### 3. Node agent (`apps/node`, `packages/protocol`)
 - Node.js + TypeScript (npm workspaces), runs as a launchd service (macOS), systemd user service (Linux)
@@ -163,20 +175,23 @@ then the node's model for its role, then for its kind, then `defaultModel`.
 - Agent loop: tool-calling over an OpenAI-compatible API; step and token budgets per task;
   every tool call logged as a task event.
 - Health before every claim (`health.ts`): only the kinds that can run now are claimed (Docker down: no
-  command kinds; model server down or disk under `minFreeDiskMb`: nothing; a model whose own server is down:
-  not offered). macOS: `caffeinate` while a task runs. Hourly: log rotation, mirrors unused for
+  command kinds; llama-server missing or disk under `minFreeDiskMb`: nothing). macOS: `caffeinate` while a task runs. Hourly: log rotation, mirrors unused for
   `mirrorMaxAgeDays` deleted. Files made by `setup:` are hidden from git in the task's worktree (never committed).
-- Model servers: one default (`modelEndpoint`) plus optional per-model servers (`modelEndpoints`, e.g. LM Studio
-  next to Ollama): `gab-node models detect` → "add".
+- Model server: the node starts the pinned llama.cpp `llama-server` itself, one process per model, on demand,
+  bound to `127.0.0.1`, and stops it after `idleMinutes` idle; idle models are unloaded to make room. The binary is
+  installed by `setup` / `update` from `llama-server.pin` (release tag + SHA-256 per platform, no sudo) into
+  `<data folder>/llama.cpp/bin`; Linux and Windows use the Vulkan build when a Vulkan driver is present, else CPU.
+  Bump the pin by editing that file. Models: `gab-node models setup` (the installer asks before downloading),
+  `list`, `pull <id|--all>`, `verify`, `remove`, `test [id]`, `manage`. Files are pinned by Hugging Face commit and
+  SHA-256, resumable, checked before use.
 - Sandboxing: Docker on macOS cannot use the Metal GPU, so the **model runs on the host**
   and **command execution** (tests, scripts) runs in a Docker container with the
   worktree mounted and no secrets. Read/grep run directly on the worktree (read-only ops).
 
 ### 4. Models on the M3 / 128 GB
-- Served by llama.cpp (or MLX-LM), OpenAI-compatible, `127.0.0.1` only.
-- Candidates: a fast MoE coder (e.g. Qwen3-Coder-30B-A3B) for `ask`/translate,
-  a larger model (70B-class or ~120B MoE, quantized) for overnight work.
-- Model list is node config; the backend hands out a task, the node picks the model.
+- All three models fit the disk (about 94 GB) but not the memory budget at once (96 GB): the node loads the one a
+  task needs and unloads idle ones first. Served by llama-server, OpenAI-compatible, `127.0.0.1` only.
+- The backend hands out a task, the node picks the model (see "Model per task").
 - `anthropic-api` / `claude-code` backends are not implemented yet (the node answers "not available on this node yet").
 
 ## Branch safety (enforced, not trusted)

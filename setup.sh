@@ -21,6 +21,8 @@
 #    survives logout and starts at boot: tried without sudo, then (only if you
 #    agree) with `sudo loginctl enable-linger`.
 # 5. The gab-node command in ~/.local/bin.
+# 6. Models: shows which of the node's three models this machine can run and asks before
+#    downloading them (tens of GB; SHA-256 checked), then checks that they call tools.
 # Safe to re-run. Updates later: bash update.sh. Removing: bash uninstall.sh.
 #
 # A new node starts PAUSED: allow it from MCP (set_node_availability).
@@ -93,8 +95,8 @@ main() {
   step "gab-node command"
   install_command "$root"
 
-  step "Models already on this machine"
-  "${cli[@]}" models detect || echo "model detection failed (not fatal): run 'gab-node models detect' later"
+  step "Models"
+  "${cli[@]}" models setup || warn "the model step did not finish (see above): run 'gab-node models setup' later"
 
   step "Battery"
   case "$(ask 'Let this node take tasks while the computer runs on battery? [y/N]')" in
@@ -106,7 +108,7 @@ main() {
 
   printf '\n\033[32mDone. Next:\033[0m\n'
   echo "  1. The node is paused: on purpose. Allow it from Claude Code (MCP): set_node_availability node=<this node's name> (always, or a nightly window)."
-  echo "  2. Models: gab-node models detect (use ones you run already) or gab-node models pull <id>   (see ARCHITECTURE.md)"
+  echo "  2. Models: gab-node models list shows them; gab-node models pull --all downloads what is missing (see ARCHITECTURE.md)"
   echo "  3. Logs: $(data_dir)/logs   Status: gab-node status"
 }
 

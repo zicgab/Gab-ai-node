@@ -16,6 +16,8 @@
 #    Already registered: kept (-Register registers again).
 # 4. Automatic start: the scheduled task "Gab-ai-node" at logon. Started now.
 # 5. The gab-node command (gab-node.cmd, this folder on your PATH).
+# 6. Models: shows which of the node's three models this machine can run and asks before
+#    downloading them (tens of GB; SHA-256 checked), then checks that they call tools.
 # Safe to re-run. Updates later: .\update.ps1. Removing: .\uninstall.ps1.
 #
 # A new node starts PAUSED: allow it from MCP (set_node_availability).
@@ -78,9 +80,9 @@ if (-not $NoService) {
 Step "gab-node command"
 Install-Command $root
 
-Step "Models already on this machine"
-try { & node $cli models detect; if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" } }
-catch { Write-Host "model detection failed (not fatal): run 'gab-node models detect' later: $_" -ForegroundColor Yellow }
+Step "Models"
+try { & node $cli models setup; if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" } }
+catch { Write-Host "the model step did not finish (not fatal): run 'gab-node models setup' later: $_" -ForegroundColor Yellow }
 
 Step "Battery"
 if ((Read-Host "Let this node take tasks while the computer runs on battery? [y/N]").Trim() -match '^[yY]') {
@@ -93,5 +95,5 @@ if ((Read-Host "Let this node take tasks while the computer runs on battery? [y/
 
 Write-Host "`nDone. Next:" -ForegroundColor Green
 Write-Host "  1. The node is paused: on purpose. Allow it from Claude Code (MCP): set_node_availability node=<this node's name> (always, or a nightly window)."
-Write-Host "  2. Models: gab-node models detect (use ones you run already) or gab-node models pull <id>   (see ARCHITECTURE.md)"
+Write-Host "  2. Models: gab-node models list shows them; gab-node models pull --all downloads what is missing (see ARCHITECTURE.md)"
 Write-Host "  3. Logs: $(Join-Path (Get-DataDir) 'logs')   Status: gab-node status"

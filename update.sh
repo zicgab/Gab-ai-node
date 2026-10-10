@@ -61,6 +61,10 @@ main() {
   install_command "$root"
   start_service
   echo "updated to ${sha:0:7}; the node runs again"
+  # Models this machine can run but does not have yet (also the first update from a version that used Ollama): asks before downloading.
+  if [ -r /dev/tty ]; then
+    node "$root/apps/node/dist/cli.js" models setup --if-missing < /dev/tty || warn "the model step did not finish (see above): run 'gab-node models setup' later"
+  fi
   # Optional: the canary review shows the node and its model still work after the update.
   if [ -t 1 ] && [ -r /dev/tty ]; then
     case $(ask "Run the canary check now (gab-node eval, a few minutes)? [y/N]") in

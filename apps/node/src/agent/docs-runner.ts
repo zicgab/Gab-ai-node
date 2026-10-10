@@ -13,14 +13,14 @@ import type { TaskContext, TaskRunner } from '../runner.js';
 import { CodeIndex } from './code-index.js';
 import { repoInstructions } from './context.js';
 import { parseReport, Problem, toFindings } from './findings.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { checkScope, withRole } from './roles.js';
 import { defaultBackend } from './runner.js';
 import { createTools } from './tools.js';
 
 const BASE = `You check that a product's public documentation (marketing page, how-to page) matches what the product really does.
 The main repo holds the app and the documentation pages; other repos (the backend) are extra repos (paths start with @owner/name/).
-Tools: read_file, list_dir, grep, search_code. You cannot run commands. Copy may live in i18n/message files, not in the page file: follow the keys.
+Tools: read_file, list_dir, grep, search_code. You cannot run commands. A page file that only shows keys (t("title"), lists of key names) holds no text: grep a key name to find the message files (messages/, locales/, i18n/, usually en.json) and read the real words there BEFORE you say something is missing from a page.
 Two kinds of problem, both need evidence from BOTH sides:
 - MISSING: the product has a feature, setting, option, limit, role/permission, status, import/export format or step that the documentation never mentions.
 - WRONG: the documentation claims or describes something the code does not do (feature not built, other name, other order of steps, other limit).
@@ -82,7 +82,7 @@ export class DocsRunner implements TaskRunner {
     });
     const parsed = await parseReport(Report, run.answer, '{"summary","problems":[{"title","severity","file","line","evidence","suggestedFix"}]}', backend, ctx.signal);
     const findings = toFindings(task.repo, parsed.report?.problems ?? [], ctx.emit);
-    const stopped = run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`;
+    const stopped = stopNote(run);
     return {
       summary: `${parsed.report ? `lens ${lens + 1}/${LENSES.length}: ${findings.length} gap(s) between the product and its docs` : 'no valid report'}${stopped}`,
       answer: parsed.report?.summary ?? run.answer, branch: null, commits: [], findings,

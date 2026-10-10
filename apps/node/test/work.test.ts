@@ -76,7 +76,7 @@ describe('WorkRunner bug_hunt', () => {
       { title: 'no evidence', severity: 'low', file: null, line: null, evidence: '' },
     ] };
     const backend = scripted([...fixSteps, { content: '```json\n' + JSON.stringify(report) + '\n```' }]);
-    const res = await new WorkRunner(async () => sb, () => backend, path.join(repo, '..', 'idx-' + randomUUID())).run(context('bug_hunt', 'agent/test-node/t1-bugs', pushed));
+    const res = await new WorkRunner(async () => sb, () => backend, path.join(repo, '..', 'idx-' + randomUUID()), 0).run(context('bug_hunt', 'agent/test-node/t1-bugs', pushed));
 
     expect(sb.runs[0]).toEqual({ command: 'echo installed > .setup-done', network: true });
     expect(sb.runs.slice(1).every((r) => !r.network)).toBe(true);
@@ -91,9 +91,25 @@ describe('WorkRunner bug_hunt', () => {
   it('repairs a report that is not JSON with one extra model call', async () => {
     const sb = new HostSandbox(repo);
     const backend = scripted([{ content: 'I found nothing worth reporting.' }, { content: '{"summary":"nothing","findings":[]}' }]);
-    const res = await new WorkRunner(async () => sb, () => backend, path.join(repo, '..', 'idx-' + randomUUID())).run(context('bug_hunt', null, []));
+    const res = await new WorkRunner(async () => sb, () => backend, path.join(repo, '..', 'idx-' + randomUUID()), 0).run(context('bug_hunt', null, []));
     expect(backend.seen).toHaveLength(2);
     expect(res).toMatchObject({ answer: 'nothing', findings: [], branch: null });
+  });
+
+  it('says how many files were read and which, so "0 findings" can be judged', async () => {
+    const backend = scripted([call('read_file', { path: 'sum.js' }), { content: '{"summary":"nothing wrong","reviewed":["sum.js"],"findings":[]}' }]);
+    const res = await new WorkRunner(async () => new HostSandbox(repo), () => backend, path.join(repo, '..', 'idx-' + randomUUID()), 0).run(context('bug_hunt', null, []));
+    expect(res.summary).toBe('0 finding(s), 1 file(s) read');
+    expect(res.answer).toBe('nothing wrong\n\nReviewed (1): sum.js');
+  });
+
+  it('sends an answer back when too few files were read, then lets the model finish', async () => {
+    const answer = '{"summary":"all read","reviewed":["sum.js"],"findings":[]}';
+    const backend = scripted([{ content: '{"summary":"quick look","findings":[]}' }, call('read_file', { path: 'sum.js' }), { content: answer }]);
+    const res = await new WorkRunner(async () => new HostSandbox(repo), () => backend, path.join(repo, '..', 'idx-' + randomUUID()), 1).run(context('bug_hunt', null, []));
+    expect(backend.seen).toHaveLength(3);
+    expect(backend.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('too few to conclude') });
+    expect(res.summary).toBe('0 finding(s), 1 file(s) read');
   });
 });
 

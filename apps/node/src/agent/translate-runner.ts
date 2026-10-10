@@ -12,7 +12,7 @@ import type { TaskContext, TaskRunner } from '../runner.js';
 import type { Sandbox } from '../sandbox.js';
 import { repoInstructions } from './context.js';
 import { parseReport } from './findings.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { changedOutsideScope, checkScope, withRole } from './roles.js';
 import { defaultBackend } from './runner.js';
 import { createTools, createWorkTools } from './tools.js';
@@ -100,7 +100,7 @@ export class TranslateRunner implements TaskRunner {
     });
     const parsed = await parseReport(Report, run.answer, '{"summary","files":[],"languages":[],"notes"}', backend, ctx.signal);
     const usage = { steps: run.steps, tokens: run.tokens + parsed.tokens, model: backend.model };
-    const stopped = run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`;
+    const stopped = stopNote(run);
 
     const status = (await exec('git', ['-C', ctx.workdir, 'status', '--porcelain', '-z', '--untracked-files=all'], { check: true })).stdout;
     const changed = status.split('\0').filter(Boolean).map((e) => e.slice(3));

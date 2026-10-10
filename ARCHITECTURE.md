@@ -162,6 +162,15 @@ model for the task's role, then for its kind, then the first installed model. A 
 fit its memory budget (`memoryBudgetMb`, default 75% of RAM): on a 64 GB machine `gpt-oss-120b` does not fit, so
 deep tasks run on `qwen3-coder-30b` (lower quality, accepted). A node with no model installed claims no local task.
 
+### Agent loop guards (`apps/node/src/agent/loop.ts`)
+A local model fails in two ways, so the loop guards against both:
+- **Repeating itself.** The same read (`read_file`, `list_dir`, `grep`, `search_code`) with the same arguments is not run again: the model is told it already has the result. Three steps in a row of only repeats add a nudge, six force the final report (`stoppedBy: repeating`). A write or a command lets earlier reads be repeated again. (The first real scan ran one `grep` 43 times and used its whole token budget without a report.)
+- **Concluding after a quick look.** A bug hunt that answers after opening fewer than 12 files with `read_file` is sent back (twice at most). Its summary says how many files it read (`0 finding(s), 31 file(s) read`) and the report lists the files it reviewed: "0 findings" only means something next to that.
+
+A bug hunt accepts code-reading evidence (the quoted line at file:line and the path to the bad result), not only a failing test, and changes files only when the task asks for fixes.
+
+`scan` reviews its candidates 10 at a time, most severe first, each batch in a fresh conversation with a share of the task budget (each step re-sends the whole conversation, so one long conversation cannot fit 200 candidates). The summary lists the candidates the budget did not reach.
+
 ### 3. Node agent (`apps/node`, `packages/protocol`)
 - Node.js + TypeScript (npm workspaces), runs as a launchd service (macOS), systemd user service (Linux)
   or a scheduled task at logon (Windows), installed by `install.sh` / `install.ps1`.

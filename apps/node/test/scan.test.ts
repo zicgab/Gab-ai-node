@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { TaskSpec } from '@gab-ai-node/protocol';
 import { extractJson, fingerprint, parseReport, toFindings } from '../src/agent/findings.js';
-import { ScanRunner } from '../src/agent/scan-runner.js';
+import { SCAN_BATCH, ScanRunner } from '../src/agent/scan-runner.js';
 import { parseGitleaks, parseNpmAudit, parseSemgrep, rankCandidates, SCAN_DIR, type Candidate, type Scanner } from '../src/agent/scanners.js';
 import type { ChatMessage, ChatResponse, ModelBackend } from '../src/backends/types.js';
 import { NodeConfig } from '../src/config.js';
@@ -145,6 +145,35 @@ describe('ScanRunner', () => {
     expect(res.summary).toContain('2 confirmed of 2 candidate(s)');
     // The scanners' raw files (gitleaks keeps the secret values) are gone before the model's file tools could read them.
     expect(await readdir(path.join(workdir, SCAN_DIR))).toEqual([]);
+  });
+
+  it('reviews candidates in batches, most severe first, each in a fresh conversation, and says what the budget did not reach', async () => {
+    const B = SCAN_BATCH;
+    const many = { results: Array.from({ length: 3 * B }, (_, i) => ({ check_id: `r${i}`, path: `/work/src/f${String(i).padStart(2, '0')}.js`, start: { line: 1 }, extra: { message: 'm', severity: 'ERROR' } })) };
+    const scanners = [fakeScanner('semgrep', many, parseSemgrep)];
+    const answer = (id: number) => ({ content: JSON.stringify({ summary: `batch with #${id}`, confirmed: [{ id, title: `bug ${id}`, severity: 'high', evidence: `src/f.js:1 path ${id}` }], rejected: [] }) });
+    const backend = scripted([answer(0), answer(B), answer(2 * B)]);
+    const res = await new ScanRunner(sandboxWriting({ semgrep: many }), () => backend, scanners).run(await context());
+    expect(backend.seen).toHaveLength(3);
+    expect(backend.seen[1]![1]!.content).toContain(`#${B} [high]`);
+    expect(backend.seen[1]![1]!.content).not.toContain('#0 [high]');
+    expect(res.findings.map((f) => f.title)).toEqual(['bug 0', `bug ${B}`, `bug ${2 * B}`]);
+    expect(res.summary).toContain(`3 confirmed of ${3 * B} candidate(s)`);
+    expect(res.summary).not.toContain('not reached');
+    // A budget that runs out after the first batch leaves the rest unreached, and says so.
+    const small = await context({ budget: { maxSteps: 5, maxMinutes: 10, maxTokens: 1e6 } });
+    const res2 = await new ScanRunner(sandboxWriting({ semgrep: many }), () => scripted([answer(0)]), scanners).run(small);
+    expect(res2.summary).toContain(`${2 * B} not reached (budget)`);
+  });
+
+  it('a batch whose answer is not a report is counted, the other batches still give findings', async () => {
+    const B = SCAN_BATCH;
+    const many = { results: Array.from({ length: 2 * B }, (_, i) => ({ check_id: `r${i}`, path: `/work/src/f${i}.js`, start: { line: 1 }, extra: { message: 'm', severity: 'ERROR' } })) };
+    const good = { content: JSON.stringify({ summary: 's', confirmed: [{ id: B + 1, title: 'real', severity: 'high', evidence: 'src/f.js:1 x' }], rejected: [] }) };
+    const backend = scripted([{ content: 'I could not finish' }, { content: 'still no JSON' }, good]);
+    const res = await new ScanRunner(sandboxWriting({ semgrep: many }), () => backend, [fakeScanner('semgrep', many, parseSemgrep)]).run(await context());
+    expect(res.findings.map((f) => f.title)).toEqual(['real']);
+    expect(res.summary).toContain('1 batch(es) without a valid report');
   });
 
   it('no candidates: the model is not called', async () => {

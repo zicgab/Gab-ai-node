@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createTools, resolveInside } from '../src/agent/tools.js';
 import { CodeIndex } from '../src/agent/code-index.js';
 import { runAgent } from '../src/agent/loop.js';
+import type { ToolDef } from '../src/agent/tools.js';
 import type { ChatMessage, ChatResponse, ModelBackend } from '../src/backends/types.js';
 
 let root: string; let extra: string; let outside: string;
@@ -94,6 +95,53 @@ describe('runAgent', () => {
     const backend = scripted([call('list_dir', { path: '' }), call('list_dir', { path: '' }), { content: 'partial answer' }]);
     const run = await runAgent({ ...base, backend, tools: createTools(roots(), null), maxSteps: 2 });
     expect(run).toMatchObject({ steps: 2, stoppedBy: 'steps', answer: '(the model returned an empty answer)' });
+  });
+
+  const counting = (name: string): ToolDef & { runs: number } => {
+    const t = { name, description: name, parameters: { type: 'object', properties: {} }, runs: 0, async run() { t.runs++; return 'ok'; } };
+    return t;
+  };
+
+  it('does not run the same read twice: the model is told it already has the result', async () => {
+    const grep = counting('grep');
+    const backend = scripted([call('grep', { pattern: 'x', path: '' }), call('grep', { path: '', pattern: 'x' }), { content: 'done' }]);
+    const run = await runAgent({ ...base, backend, tools: [grep], maxSteps: 10 });
+    expect(grep.runs).toBe(1);
+    expect(backend.seen[2]!.filter((m) => m.role === 'tool').at(-1)?.content).toContain('already made this exact call at step 1');
+    expect(run.stoppedBy).toBe('answer');
+  });
+
+  it('nudges a model that keeps repeating, then forces its final report', async () => {
+    const grep = counting('grep');
+    const backend = scripted([...Array(7).fill(call('grep', { pattern: 'form-data' })), { content: 'partial report' }]);
+    const run = await runAgent({ ...base, backend, tools: [grep], maxSteps: 50 });
+    expect(grep.runs).toBe(1);
+    expect(run).toMatchObject({ stoppedBy: 'repeating', answer: 'partial report', steps: 8 });
+    const lastSeen = backend.seen.at(-1)!;
+    expect(lastSeen.some((m) => m.role === 'user' && String(m.content).includes('You keep making calls you already made'))).toBe(true);
+    expect(lastSeen.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('Stop and write the final report') });
+  });
+
+  it('a write or command makes earlier reads worth repeating again', async () => {
+    const grep = counting('grep'); const write = counting('write_file');
+    const backend = scripted([call('grep', { pattern: 'x' }), call('write_file', {}), call('grep', { pattern: 'x' }), { content: 'done' }]);
+    await runAgent({ ...base, backend, tools: [grep, write], maxSteps: 10 });
+    expect(grep.runs).toBe(2);
+  });
+
+  it('sends an answer back when too few files were opened, counts each file once, and gives in after two tries', async () => {
+    const backend = scripted([{ content: 'nothing' }, call('read_file', { path: 'src/users.ts' }), call('read_file', { path: 'src/users.ts', start: 1 }), { content: 'nothing' }]);
+    const run = await runAgent({ ...base, backend, tools: createTools(roots(), null), maxSteps: 10, minFilesRead: 2 });
+    expect(backend.seen[1]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('opened 0 file(s)') });
+    expect(backend.seen[4]!.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('opened 1 file(s)') });
+    expect(run).toMatchObject({ answer: 'nothing', filesRead: 1, stoppedBy: 'answer' });
+    expect(run.steps).toBe(5);
+  });
+
+  it('stepBase shifts the step numbers in the events', async () => {
+    const events: Record<string, unknown>[] = [];
+    await runAgent({ ...base, emit: (_t, d) => events.push(d), backend: scripted([call('list_dir', { path: '' }), { content: 'x' }]), tools: createTools(roots(), null), maxSteps: 5, stepBase: 40 });
+    expect(events.map((e) => e.step)).toEqual([41, 41, 42]);
   });
 
   it('stops on abort', async () => {

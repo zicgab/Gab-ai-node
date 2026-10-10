@@ -60,4 +60,13 @@ describe('DocsRunner', () => {
     expect(user).toContain('Task:\nexpenses');
     expect(user).not.toContain('[lens:');
   });
+
+  it('keeps a report whose line is "absent" or a range instead of a number (it used to be thrown away)', async () => {
+    const problem = (title: string, line: unknown) => ({ title, severity: 'low', file: 'page.tsx', line, evidence: `app a.tsx:1 vs docs page.tsx: ${title}` });
+    const report = { summary: 'compared', problems: [problem('no line', 'absent'), problem('range', '12-20'), problem('number', 7), problem('empty', '')] };
+    const backend = scripted([{ content: JSON.stringify(report) }]);
+    const res = await new DocsRunner(() => backend, path.join(os.tmpdir(), 'idx-' + randomUUID())).run(await setup('[lens:0] expenses'));
+    expect(backend.seen).toHaveLength(1);
+    expect(Object.fromEntries(res.findings.map((f) => [f.title, f.line]))).toEqual({ 'no line': null, range: 12, number: 7, empty: null });
+  });
 });

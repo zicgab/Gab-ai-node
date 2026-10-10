@@ -7,7 +7,7 @@ import { reposDir } from '../paths.js';
 import type { TaskContext, TaskRunner } from '../runner.js';
 import { CodeIndex } from './code-index.js';
 import { repoInstructions } from './context.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { CATALOG } from '../models/catalog.js';
 import { modelFor } from '../models/pick.js';
 import { checkScope, withRole } from './roles.js';
@@ -47,7 +47,7 @@ export class AgentRunner implements TaskRunner {
       maxSteps: task.budget.maxSteps, maxTokens: task.budget.maxTokens, signal: ctx.signal, emit: ctx.emit,
     });
     return {
-      summary: `answered in ${run.steps} step(s)${run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`}`,
+      summary: `answered in ${run.steps} step(s)${stopNote(run)}`,
       answer: run.answer, branch: null, commits: [], findings: [],
       usage: { steps: run.steps, tokens: run.tokens, model: backend.model },
     };

@@ -10,7 +10,7 @@ import { reposDir } from '../paths.js';
 import type { TaskContext, TaskRunner } from '../runner.js';
 import { repoInstructions } from './context.js';
 import { parseReport, Problem, toFindings } from './findings.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { checkScope, withRole } from './roles.js';
 import { defaultBackend } from './runner.js';
 import { CodeIndex } from './code-index.js';
@@ -63,7 +63,7 @@ export class ContractRunner implements TaskRunner {
     });
     const parsed = await parseReport(Report, run.answer, '{"summary","problems":[{"title","severity","file","line","evidence","suggestedFix"}]}', backend, ctx.signal);
     const findings = toFindings(task.repo, parsed.report?.problems ?? [], ctx.emit);
-    const stopped = run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`;
+    const stopped = stopNote(run);
     return {
       summary: `${parsed.report ? `${findings.length} mismatch(es) between ${task.repo} and ${clients.length} client(s)` : 'no valid report'}${stopped}`,
       answer: parsed.report?.summary ?? run.answer, branch: null, commits: [], findings,

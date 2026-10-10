@@ -14,7 +14,7 @@ import { RetryableError, type TaskContext, type TaskRunner } from '../runner.js'
 import { DockerSandbox, type Sandbox } from '../sandbox.js';
 import { repoInstructions } from './context.js';
 import { parseReport, Problem, toFindings } from './findings.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { parseRepoConfig } from './repo-config.js';
 import { checkScope, withRole } from './roles.js';
 import { isVisionModel } from '../models/pick.js';
@@ -134,7 +134,7 @@ export class WebRunner implements TaskRunner {
       const tokens = run.tokens + parsed.tokens;
       const report = parsed.report;
       const findings = toFindings(task.repo, report?.problems ?? [], ctx.emit);
-      const stopped = run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`;
+      const stopped = stopNote(run);
       return {
         summary: `${report ? (report.passed && findings.length === 0 ? 'passed' : `${findings.length} problem(s)`) : 'no valid report'}${stopped}`,
         answer: report?.summary ?? run.answer, branch: null, commits: [], findings,

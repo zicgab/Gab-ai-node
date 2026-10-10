@@ -18,9 +18,15 @@ export function extractJson(text: string): unknown {
   return JSON.parse(candidate);
 }
 
+/** A line number. A model sometimes writes "absent", "12-20" or "": the first number in it, else none. */
+export const lineNumber = z.preprocess((v) => {
+  if (typeof v === 'string') { const m = /\d+/.exec(v); return m ? Number(m[0]) : null; }
+  return v;
+}, z.number().nullable().optional()) as z.ZodType<number | null | undefined>;
+
 /** A problem as the model reports it; loose on purpose, toFindings checks it. */
 export const Problem = z.object({
-  title: z.string(), severity: z.string(), file: z.string().nullable().optional(), line: z.number().nullable().optional(),
+  title: z.string(), severity: z.string(), file: z.string().nullable().optional(), line: lineNumber,
   evidence: z.string(), suggestedFix: z.string().nullable().optional(),
 }).passthrough();
 export type Problem = z.infer<typeof Problem>;

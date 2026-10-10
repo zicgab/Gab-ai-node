@@ -16,7 +16,7 @@ import { exec, type ExecResult } from '../exec.js';
 import { RetryableError, type TaskContext, type TaskRunner } from '../runner.js';
 import { repoInstructions } from './context.js';
 import { parseReport, Problem, toFindings } from './findings.js';
-import { runAgent } from './loop.js';
+import { runAgent, stopNote } from './loop.js';
 import { buildFlow, FlowName } from './maestro-flow.js';
 import { checkScope, withRole } from './roles.js';
 import { defaultBackend } from './runner.js';
@@ -115,7 +115,7 @@ export class MobileRunner implements TaskRunner {
       });
       const parsed = await parseReport(Report, run.answer, '{"summary","passed","problems":[{"title","severity","file","line","evidence","suggestedFix"}]}', backend, ctx.signal);
       const findings = toFindings(task.repo, parsed.report?.problems ?? [], ctx.emit);
-      const stopped = run.stoppedBy === 'answer' ? '' : ` (stopped by ${run.stoppedBy} budget)`;
+      const stopped = stopNote(run);
       return {
         summary: `${parsed.report ? (parsed.report.passed && findings.length === 0 ? 'passed' : `${findings.length} problem(s)`) : 'no valid report'}${stopped}`,
         answer: parsed.report?.summary ?? run.answer, branch: null, commits: [], findings,

@@ -1,8 +1,8 @@
 // Calls to the coordinator. Network failures are retried with backoff where
 // losing the call would lose work (complete, fail); a 4xx is final.
 import {
-  ClaimResponse, GithubToken, HeartbeatResponse, RegisterResponse,
-  type ClaimRequest, type Capabilities, type TaskResult,
+  ClaimResponse, GithubToken, HeartbeatResponse, PushResponse, RegisterResponse,
+  type ClaimRequest, type Capabilities, type PushRequest, type TaskResult,
 } from '@gab-ai-node/protocol';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -101,6 +101,11 @@ export class CoordinatorClient {
 
   githubToken(taskId: string, leaseId: string): Promise<GithubToken> {
     return this.call(`${API}/tasks/${taskId}/github-token`, { leaseId }, GithubToken);
+  }
+
+  /** The backend commits the change to the task's agent branch and answers with the GitHub commit. */
+  push(taskId: string, body: PushRequest, signal?: AbortSignal): Promise<PushResponse> {
+    return this.call(`${API}/tasks/${taskId}/push`, body, PushResponse, 5 * 60_000, signal);
   }
 
   events(taskId: string, leaseId: string, events: { type: string; data: Record<string, unknown> }[]): Promise<unknown> {

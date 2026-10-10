@@ -15,7 +15,7 @@ import { noModelHost, type ModelHost } from './models/server.js';
 import { log } from './log.js';
 import { deferredKinds, fallbackModel, modelFor } from './models/pick.js';
 import { pauseFile, reposDir, workDir } from './paths.js';
-import { addWorktree, cleanWorkDir, commitAndPush, syncMirror, type Worktree } from './repos.js';
+import { addWorktree, cleanWorkDir, collectChanges, commitLocal, syncMirror, type Worktree } from './repos.js';
 import { RetryableError, type TaskContext, type TaskRunner } from './runner.js';
 
 type StopReason = 'cancelled' | 'budget' | 'shutdown';
@@ -229,6 +229,8 @@ export class NodeAgent {
         try { main = await prepare(task.repo, 'repo', task.ref); }
         catch (err) { throw new RetryableError(`preparing ${task.repo} failed: ${(err as Error).message}`); }
       }
+      // Last uploaded state: the local commit the next change is measured from, and its commit on GitHub.
+      const pushed = { local: main?.commit ?? '', remote: main?.commit ?? '' };
       const extraDirs: Record<string, string> = {};
       for (const [i, repo] of task.extraRepos.entries()) extraDirs[repo] = (await prepare(repo, `extra-${i}`, null)).dir;
 
@@ -242,17 +244,19 @@ export class NodeAgent {
           }
           return p;
         },
+        // The node commits locally and uploads the change; the backend commits it on GitHub to the
+        // task's agent branch. The node never holds a GitHub write token.
         commitAndPush: async (message) => {
           if (!main || !task.repo) throw new Error('this task has no repo to commit to');
-          if (!r.github?.canPush) throw new Error('this task has no GitHub write token (repo not pushable, or no GitHub App on the coordinator)');
-          // Installation tokens last 1 hour: refresh when less than 10 minutes are left.
-          if (Date.parse(r.github.expiresAt) - Date.now() < 10 * 60_000) r.github = await this.d.client.githubToken(task.id, r.leaseId);
-          const commit = await commitAndPush({
-            dir: main.dir, repo: task.repo, branch: task.branch ?? '', taskBranch: task.branch, message,
-            token: r.github.token, author: this.d.config.name, remoteUrl: this.d.remoteUrl?.(task.repo), signal: r.abort.signal,
-          });
-          if (commit) ctx.emit('progress', { stage: 'pushed', branch: task.branch, commit });
-          return commit;
+          const local = await commitLocal({ dir: main.dir, branch: task.branch ?? '', taskBranch: task.branch, message, author: this.d.config.name });
+          if (!local) return null;
+          const changes = await collectChanges(main.dir, pushed.local, local);
+          if (changes.length === 0) { pushed.local = local; return null; }
+          const res = await this.d.client.push(task.id, { leaseId: r.leaseId, parentSha: pushed.remote, message: message.trim().slice(0, 5_000), changes }, r.abort.signal);
+          pushed.local = local;
+          pushed.remote = res.commit;
+          ctx.emit('progress', { stage: 'pushed', branch: res.branch, commit: res.commit });
+          return res.commit;
         },
         emit: (type, data) => { r.events.push({ type, data }); if (r.events.length >= 50) void this.flushEvents(r); },
       };

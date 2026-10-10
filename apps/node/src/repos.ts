@@ -1,5 +1,6 @@
 // Repo checkouts: one bare mirror per repo (fetched before each task), and one
 // throwaway worktree per task under work/<task-id>. Worktrees are always removed.
+import { spawn } from 'node:child_process';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { RepoName, isAgentBranch } from '@gab-ai-node/protocol';
@@ -96,15 +97,11 @@ export async function cleanWorkDir(root = workDir()): Promise<void> {
 }
 
 /**
- * Commits everything changed in the worktree and pushes it to branch, which
- * must be an agent branch and the task's own. Pushes to the repo URL with an
- * explicit refspec (never to the mirror's "origin", whose mirror setting would
- * push every ref) and never forces. Returns the commit, or null if nothing changed.
+ * Commits everything changed in the worktree (locally only) when branch is the task's own agent
+ * branch. Returns the new local commit, or null when nothing changed. Nodes never push: the change
+ * goes to the backend (collectChanges + CoordinatorClient.push), which commits it on GitHub.
  */
-export async function commitAndPush(opts: {
-  dir: string; repo: string; branch: string; taskBranch: string | null; message: string;
-  token: string | null; author: string; remoteUrl?: string; signal?: AbortSignal;
-}): Promise<string | null> {
+export async function commitLocal(opts: { dir: string; branch: string; taskBranch: string | null; message: string; author: string }): Promise<string | null> {
   if (opts.taskBranch === null) throw new Error('this task may not push (no agent branch)');
   if (opts.branch !== opts.taskBranch) throw new Error(`refusing to push ${opts.branch}: the task's branch is ${opts.taskBranch}`);
   if (!isAgentBranch(opts.branch)) throw new Error(`refusing to push ${opts.branch}: not an agent/** branch`);
@@ -117,9 +114,37 @@ export async function commitAndPush(opts: {
   const email = `${opts.author}@gab-ai-node.invalid`;
   await exec('git', ['-C', opts.dir, '-c', `user.name=gab-ai-node (${opts.author})`, '-c', `user.email=${email}`, '-c', 'commit.gpgsign=false',
     'commit', '--quiet', '--no-verify', '-F', '-'], { check: true, input: message });
-  const commit = (await exec('git', ['-C', opts.dir, 'rev-parse', 'HEAD'], { check: true })).stdout.trim();
-  const url = opts.remoteUrl ?? `https://github.com/${RepoName.parse(opts.repo)}.git`;
-  await exec('git', ['-C', opts.dir, 'push', '--quiet', '--no-verify', url, `HEAD:refs/heads/${opts.branch}`],
-    { env: gitEnv(opts.token), check: true, signal: opts.signal, timeoutMs: 10 * 60_000 });
-  return commit;
+  return (await exec('git', ['-C', opts.dir, 'rev-parse', 'HEAD'], { check: true })).stdout.trim();
+}
+
+export type PushChange = { path: string; deleted: true } | { path: string; mode: '100644' | '100755'; contentBase64: string };
+
+/** The files that differ between two commits, with their content at head (what the backend commits). */
+export async function collectChanges(dir: string, base: string, head: string): Promise<PushChange[]> {
+  const diff = await exec('git', ['-C', dir, 'diff', '--name-status', '--no-renames', '-z', base, head], { check: true });
+  const parts = diff.stdout.split('\0').filter((s) => s !== '');
+  const changes: PushChange[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const status = parts[i]!; const file = parts[i + 1]!;
+    if (status === 'D') { changes.push({ path: file, deleted: true }); continue; }
+    const entry = (await exec('git', ['-C', dir, 'ls-tree', '-z', head, '--', file], { check: true })).stdout.split('\0')[0] ?? '';
+    const [mode, type, sha] = entry.split(/\s+/);
+    if (type !== 'blob' || (mode !== '100644' && mode !== '100755') || !sha) {
+      throw new Error(`${file}: only regular files can be pushed (git mode ${mode ?? '?'}, ${type ?? '?'}); no symlinks or submodules`);
+    }
+    changes.push({ path: file, mode, contentBase64: (await gitBlob(dir, sha)).toString('base64') });
+  }
+  return changes;
+}
+
+/** A blob's raw bytes (exec() reads text; binary files need the bytes as they are). */
+function gitBlob(dir: string, sha: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['-C', dir, 'cat-file', 'blob', sha], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks: Buffer[] = []; let err = '';
+    child.stdout.on('data', (d: Buffer) => chunks.push(d));
+    child.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`git cat-file ${sha} failed (exit ${code}): ${err.trim().slice(0, 300)}`))));
+  });
 }

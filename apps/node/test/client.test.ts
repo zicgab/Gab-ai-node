@@ -64,6 +64,15 @@ describe('CoordinatorClient', () => {
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/worker/agent/heartbeat', auth: `Bearer ${TOKEN}`, version: '0.1.0' });
   });
 
+  it('uploads a change to /worker/agent/tasks/<id>/push and reads the commit the backend made', async () => {
+    const commit = 'e'.repeat(40);
+    reply = () => ({ status: 200, body: { commit, branch: 'agent/mac/t1-readme' } });
+    const body = { leaseId: '00000000-0000-4000-8000-000000000000', parentSha: 'a'.repeat(40), message: 'docs', changes: [{ path: 'README.md', mode: '100644' as const, contentBase64: 'aGk=' }] };
+    const res = await new CoordinatorClient(base, TOKEN).push('11111111-1111-4111-8111-111111111111', body);
+    expect(res).toEqual({ commit, branch: 'agent/mac/t1-readme' });
+    expect(seen[0]).toMatchObject({ url: '/worker/agent/tasks/11111111-1111-4111-8111-111111111111/push', auth: `Bearer ${TOKEN}`, body });
+  });
+
   it('turns a 401 into a final ApiError carrying the backend message', async () => {
     reply = () => ({ status: 401, body: { success: false, message: 'Missing or invalid worker token' } });
     const err = await new CoordinatorClient(base, TOKEN).heartbeat([]).catch((e: unknown) => e);

@@ -9,8 +9,10 @@ Nothing below is done for you: each step is yours to run. Order matters.
    `zicgab/Gab-ai-node`), `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (see `docs/github-setup.md`).
 3. Deploy manually on Coolify. The agent API is only reachable over Tailscale.
 4. MCP token: `node scripts/agent-node-token.js mcp "<label>"`, run the INSERT it prints, put the token in your MCP client.
-5. Per repo: the `INSERT INTO agent_repos` examples in `docs/github-setup.md` (kinds per repo type), then
-   `node scripts/agent-node-ruleset.js <owner/name>` (agents may only push `agent/**`).
+5. Per repo: the `INSERT INTO agent_repos` examples in `docs/github-setup.md` (kinds per repo type).
+   Pushes go through the backend, which only writes `agent/**` branches (ARCHITECTURE.md, Branch safety).
+   With GitHub Pro (rulesets on private repos), also run `node scripts/agent-node-ruleset.js <owner/name>`
+   so GitHub itself refuses anything outside `agent/**`.
 
 ## 2. The Gab-ai-node repo
 Push it to GitHub as `zicgab/Gab-ai-node` (the backend serves the installer and updates from it).

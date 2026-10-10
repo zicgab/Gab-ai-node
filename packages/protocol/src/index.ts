@@ -116,6 +116,24 @@ export type TaskSpec = z.infer<typeof TaskSpec>;
 export const GithubToken = z.object({ token: z.string().min(10), expiresAt: z.string(), canPush: z.boolean() });
 export type GithubToken = z.infer<typeof GithubToken>;
 
+/**
+ * A node's change, uploaded to the backend, which commits it on GitHub to the task's agent branch.
+ * Nodes never hold a GitHub write token. parentSha: the task's starting commit, then the commit the
+ * previous push returned.
+ */
+export const PushRequest = z.object({
+  leaseId: id,
+  parentSha: z.string().regex(/^[0-9a-f]{40}$/),
+  message: z.string().min(1).max(5000),
+  changes: z.array(z.union([
+    z.object({ path: z.string().min(1).max(1000), deleted: z.literal(true) }),
+    z.object({ path: z.string().min(1).max(1000), mode: z.enum(['100644', '100755']), contentBase64: z.string() }),
+  ])).min(1).max(500),
+});
+export type PushRequest = z.infer<typeof PushRequest>;
+export const PushResponse = z.object({ commit: z.string().regex(/^[0-9a-f]{40}$/), branch: z.string() });
+export type PushResponse = z.infer<typeof PushResponse>;
+
 export const ClaimResponse = z.object({
   task: TaskSpec.nullable(),
   /** Null when the coordinator has no GitHub App configured (the node then uses its own read token). */

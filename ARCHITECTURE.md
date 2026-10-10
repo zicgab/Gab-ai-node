@@ -197,11 +197,20 @@ deep tasks run on `qwen3-coder-30b` (lower quality, accepted). A node with no mo
 
 ## Branch safety (enforced, not trusted)
 1. GitHub App "gab-ai-node" installed only on allowlisted repos (contents: write, metadata: read).
-2. Per repo, a **ruleset** blocks create/update/delete on all branches **except `agent/**`**;
-   I am on the bypass list. The App therefore physically cannot touch `main` or my branches.
-   `node scripts/agent-node-ruleset.js <owner/repo>` (gasysteme) creates it; without it the backend refuses push tokens.
-3. Backend and node also check the branch prefix before pushing (defence in depth).
-4. No force-push; one branch per task: `agent/<node>/<task-id>-<slug>`.
+2. **Nodes never hold a write token.** At claim a node gets a read-only token (clone/fetch). To push, it
+   commits locally and uploads the changed files (`POST /worker/agent/tasks/:id/push`); the backend
+   creates the commit on GitHub (blobs, tree, commit) on top of the task's starting commit.
+3. **The backend never writes to `main`.** One function moves a branch (`writeAgentRef`, gasysteme
+   `ai-worker/agent/github.js`): it only accepts `agent/<node>/<rest>`, takes the branch from the task
+   row held by the lease (never from the node), creates it or fast-forwards it (`force: false`). Tests
+   check every GitHub request of the push flow. The write token is minted per push and stays in the backend.
+4. A push is refused when it touches `.github/workflows/**` or `.github/actions/**` (a workflow would run
+   on push with the repo's secrets), `.git/`, a path with `..`, a symlink or submodule, or is too big
+   (500 files, 2 MB per file, 10 MB per push).
+5. Limit: on GitHub Free, private repos cannot have rulesets, so GitHub itself does not enforce
+   "agent/** only"; the backend code does. With GitHub Pro, `node scripts/agent-node-ruleset.js <owner/repo>`
+   adds a ruleset that blocks every branch except `agent/**`, on top of the above.
+6. One branch per task: `agent/<node>/<task-id>-<slug>`; the node checks the prefix too (defence in depth).
 
 ## Security
 - Node tokens: random 32 bytes, SHA-256 hash in `ai_workers`, one per node, a worker's token only works for its own project.

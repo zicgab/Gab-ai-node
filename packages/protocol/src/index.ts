@@ -62,7 +62,11 @@ export const Capabilities = z.object({
 export type Capabilities = z.infer<typeof Capabilities>;
 
 /** Answer of POST /node/agent/register (gasysteme ai-worker/nodes.js): the node's own token, shown once. */
-export const RegisterResponse = z.object({ name: NodeName, project: z.literal('agent'), created: z.boolean(), token: z.string().min(32) });
+export const RegisterResponse = z.object({
+  name: NodeName, project: z.literal('agent'), created: z.boolean(), token: z.string().min(32),
+  /** What the backend set when the node asked (allowed / paused); absent from a backend that does not know the option yet. */
+  available: z.boolean().nullish(),
+});
 export type RegisterResponse = z.infer<typeof RegisterResponse>;
 
 export const ClaimRequest = z.object({

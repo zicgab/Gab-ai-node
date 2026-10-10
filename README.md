@@ -20,8 +20,10 @@ downloads the code into `~/gab-ai-node` (`%USERPROFILE%\gab-ai-node`), builds
 it, installs the pinned `llama-server` (the node's only model engine; nothing else
 like Ollama is needed), registers the machine, installs the automatic start (launchd,
 systemd user service, or a scheduled task), and lists the node's three models with
-what this machine can run: it asks before downloading them (tens of GB). A new node starts **paused**: allow
-it from MCP (`set_node_availability`).
+what this machine can run: it asks before downloading them (tens of GB). The node is **allowed to work as soon
+as it registers** (nothing to run in MCP). To start it paused or only at night, run `bash setup.sh --paused` or
+`bash setup.sh --window 22:00-07:00 --time-zone Europe/Paris` (`-Paused`, `-Window`, `-TimeZone` on Windows).
+Needs the backend with the registration option deployed; an older backend leaves the node paused (the installer says so).
 
 Stopped halfway: `bash setup.sh` / `.\setup.ps1` in that folder (safe to re-run).
 

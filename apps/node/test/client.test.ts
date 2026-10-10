@@ -41,6 +41,18 @@ describe('CoordinatorClient', () => {
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/node/agent/register', auth: `Bearer ${'k'.repeat(40)}`, body: { name: 'mac' } });
   });
 
+  it('asks to be allowed when it registers, and reads what the backend set', async () => {
+    reply = () => ({ status: 200, body: { name: 'mac', project: 'agent', created: true, token: TOKEN, available: true } });
+    const res = await CoordinatorClient.register(base, 'k'.repeat(40), 'mac', { available: true, window: '22:00-07:00', timeZone: 'Europe/Paris' });
+    expect(res.available).toBe(true);
+    expect(seen.at(-1)).toMatchObject({ body: { name: 'mac', available: true, window: '22:00-07:00', timeZone: 'Europe/Paris' } });
+  });
+
+  it('accepts the answer of a backend that does not know the option yet (no "available")', async () => {
+    reply = () => ({ status: 200, body: { name: 'mac', project: 'agent', created: true, token: TOKEN } });
+    expect((await CoordinatorClient.register(base, 'k'.repeat(40), 'mac', { available: true })).available).toBeUndefined();
+  });
+
   it('refuses a registration answer without a real token', async () => {
     reply = () => ({ status: 200, body: { name: 'mac', project: 'agent', created: true, token: 'short' } });
     await expect(CoordinatorClient.register(base, 'k'.repeat(40), 'mac')).rejects.toThrow();

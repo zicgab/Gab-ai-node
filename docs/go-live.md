@@ -21,7 +21,7 @@ Push it to GitHub as `zicgab/Gab-ai-node` (the backend serves the installer and 
 3. Models: `gab-node models setup` (the installer already offers it), or `gab-node models list` and
    `gab-node models pull --all`. The model for each job type is fixed (see ARCHITECTURE.md, "Model per task");
    `gab-node models test` checks that an installed model calls tools.
-4. Allow it: `set_node_availability` from MCP (a new node starts paused).
+4. Allow it: the installer already did (the node registers as allowed). Change it later with `set_node_availability` from MCP; `--paused` / `--window` at install start it paused or nightly-only.
 5. Per repo, write what the node needs in the repo's `AGENT.md` (lines like `setup: npm ci`):
    `test:` (all), `start:` + `url:` (test_web), `electron:` (test_electron).
 6. Mobile (optional): `mobile` section of the node's `config.json` and Maestro on PATH, see `ARCHITECTURE.md` (test_mobile).

@@ -2,7 +2,7 @@
 # install.ps1 runs it on a new machine; it can also be run again by hand, as the
 # account that will run the node, from this folder:
 #
-#   Set-ExecutionPolicy -Scope Process Bypass -Force; .\setup.ps1 [-Server URL] [-Name NAME] [-NoService] [-Register]
+#   Set-ExecutionPolicy -Scope Process Bypass -Force; .\setup.ps1 [-Server URL] [-Name NAME] [-NoService] [-Register] [-Paused | -Window 22:00-07:00 [-TimeZone ZONE]]
 #
 # 1. Tools: Node.js 20+, npm, git must be installed (setup never installs
 #    software). Docker is checked: commands of bug hunts and tests run in it.
@@ -27,6 +27,9 @@ param(
   [string]$Name = "",
   [string]$NodeKey = "",
   [switch]$NoService,
+  [switch]$Paused,
+  [string]$Window = "",
+  [string]$TimeZone = "",
   [switch]$Register
 )
 $ErrorActionPreference = "Stop"
@@ -64,7 +67,8 @@ if ($registered) {
     if (-not $NodeKey) { $NodeKey = Read-Secret "Node key (backend NODE_API_KEY; used once, not saved)" }
     # The key goes to the CLI through the environment of this one command, never on a command line.
     $env:GAB_NODE_KEY = $NodeKey
-    try { & node $cli register --server $Server --name $Name; $code = $LASTEXITCODE } finally { Remove-Item Env:\GAB_NODE_KEY -ErrorAction SilentlyContinue }
+    $regExtra = @(); if ($Paused) { $regExtra += "--paused" }; if ($Window) { $regExtra += @("--window", $Window) }; if ($TimeZone) { $regExtra += @("--time-zone", $TimeZone) }
+    try { & node $cli register --server $Server --name $Name @regExtra; $code = $LASTEXITCODE } finally { Remove-Item Env:\GAB_NODE_KEY -ErrorAction SilentlyContinue }
     if ($code -eq 0) { break }
     Write-Host "Registration failed (see above). Wrong key? Try again, or Ctrl+C." -ForegroundColor Yellow
     $NodeKey = ""
@@ -94,6 +98,7 @@ if ((Read-Host "Let this node take tasks while the computer runs on battery? [y/
 & node $cli status
 
 Write-Host "`nDone. Next:" -ForegroundColor Green
-Write-Host "  1. The node is paused: on purpose. Allow it from Claude Code (MCP): set_node_availability node=<this node's name> (always, or a nightly window)."
+if ($Paused) { Write-Host "  1. The node is paused, as asked: allow it from Claude Code (MCP): set_node_availability node=<this node's name>" }
+else { Write-Host "  1. The node is allowed to take tasks (see Registration above). Stop it: gab-node pause here, or set_node_availability from MCP" }
 Write-Host "  2. Models: gab-node models list shows them; gab-node models pull --all downloads what is missing (see ARCHITECTURE.md)"
 Write-Host "  3. Logs: $(Join-Path (Get-DataDir) 'logs')   Status: gab-node status"

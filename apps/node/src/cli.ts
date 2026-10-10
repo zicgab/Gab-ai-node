@@ -45,8 +45,10 @@ async function readHidden(prompt: string): Promise<string> {
 }
 
 async function register(args: string[]): Promise<void> {
-  const { values } = parseArgs({ args, options: { server: { type: 'string' }, name: { type: 'string' } } });
-  if (!values.server || !values.name) throw new Error('usage: gab-node register --server <url> --name <node-name>');
+  const { values } = parseArgs({ args, options: { server: { type: 'string' }, name: { type: 'string' }, paused: { type: 'boolean' }, window: { type: 'string' }, 'time-zone': { type: 'string' } } });
+  if (!values.server || !values.name) throw new Error('usage: gab-node register --server <url> --name <node-name> [--paused | --window 22:00-07:00 --time-zone Europe/Paris]');
+  if (values.paused && (values.window || values['time-zone'])) throw new Error('--paused cannot be combined with --window / --time-zone');
+  if (values['time-zone'] && !values.window) throw new Error('--time-zone goes with --window (a nightly window)');
   const name = NodeName.parse(values.name);
   const nodeKey = process.env.GAB_NODE_KEY?.trim() || (await readHidden('Node key (backend NODE_API_KEY; used once, not saved): '));
   if (!nodeKey) throw new Error('no node key given');
@@ -55,12 +57,16 @@ async function register(args: string[]): Promise<void> {
   let previous: Partial<NodeConfig> = {};
   if (existsSync(configFile())) previous = await loadConfig().catch(() => ({}));
   const config = NodeConfig.parse({ ...previous, coordinatorUrl: values.server.replace(/\/$/, ''), name });
-  const res = await CoordinatorClient.register(config.coordinatorUrl, nodeKey, name);
+  // A node is allowed to work as soon as it registers (the installer is run by the owner with the node key); --paused opts out.
+  const availability = values.paused ? { available: false }
+    : { available: true, ...(values.window ? { window: values.window, timeZone: values['time-zone'] ?? Intl.DateTimeFormat().resolvedOptions().timeZone } : {}) };
+  const res = await CoordinatorClient.register(config.coordinatorUrl, nodeKey, name, availability);
   await defaultStore().set('NODE_TOKEN', res.token);
   await saveConfig(config);
-  console.log(res.created
-    ? `Registered as ${res.name}. The node starts paused: make it available from MCP (set_node_availability).`
-    : `${res.name} existed: it has a new token now (the old one stopped working). Availability is unchanged.`);
+  console.log(res.created ? `Registered as ${res.name}.` : `${res.name} existed: it has a new token now (the old one stopped working).`);
+  if (res.available === true) console.log(values.window ? `The node is allowed to take tasks ${values.window} (${availability.timeZone}).` : 'The node is allowed to take tasks now (pause it: set_node_availability from MCP, or "gab-node pause" on this machine).');
+  else if (res.available === false) console.log('The node is paused, as asked: allow it from MCP (set_node_availability).');
+  else console.warn('The backend did not report the node\'s availability (it may not be updated yet): if the node takes no task, allow it from MCP (set_node_availability).');
 }
 
 async function retire(): Promise<void> {

@@ -60,8 +60,8 @@ export class CoordinatorClient {
    * Registers this machine as an agent node with the install key (backend NODE_API_KEY, used once,
    * never saved). Registering a name again gives it a new token: the old one stops working.
    */
-  static async register(baseUrl: string, nodeKey: string, name: string): Promise<RegisterResponse> {
-    return new CoordinatorClient(baseUrl, nodeKey).call('/node/agent/register', { name }, RegisterResponse);
+  static async register(baseUrl: string, nodeKey: string, name: string, availability?: { available: boolean; window?: string | null; timeZone?: string }): Promise<RegisterResponse> {
+    return new CoordinatorClient(baseUrl, nodeKey).call('/node/agent/register', { name, ...availability }, RegisterResponse);
   }
 
   /**

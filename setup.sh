@@ -3,7 +3,7 @@
 # install.sh runs it on a new machine; it can also be run again by hand, as the
 # user that will run the node (not with sudo), from this folder:
 #
-#   bash setup.sh [--server URL] [--name NAME] [--no-service]
+#   bash setup.sh [--server URL] [--name NAME] [--no-service] [--paused | --window 22:00-07:00 [--time-zone ZONE]]
 #
 # 1. Tools: Node.js 20+, git, npm (macOS: Homebrew installs what is missing;
 #    Linux: asks you to install it; setup never installs software with sudo). Docker is checked:
@@ -25,11 +25,12 @@
 #    downloading them (tens of GB; SHA-256 checked), then checks that they call tools.
 # Safe to re-run. Updates later: bash update.sh. Removing: bash uninstall.sh.
 #
-# A new node starts PAUSED: allow it from MCP (set_node_availability).
+# A new node is ALLOWED to work as soon as it registers (--paused: it starts paused; --window: only in a nightly window).
 
 main() {
   set -euo pipefail
-  local root server="" name="" no_service=0 reregister=0
+  local root server="" name="" no_service=0 reregister=0 paused=0
+  local -a reg_extra=()
   root="$(cd "$(dirname "$0")" && pwd)"
   . "$root/node-lib.sh"
   local node_key="${GAB_NODE_KEY:-}"
@@ -41,7 +42,10 @@ main() {
       --name) name=${2:-}; shift 2 ;;
       --no-service) no_service=1; shift ;;
       --register) reregister=1; shift ;;
-      *) die "unknown option $1 (--server URL, --name NAME, --no-service, --register)" ;;
+      --paused) reg_extra+=(--paused); paused=1; shift ;;
+      --window) reg_extra+=(--window "${2:-}"); shift 2 ;;
+      --time-zone) reg_extra+=(--time-zone "${2:-}"); shift 2 ;;
+      *) die "unknown option $1 (--server URL, --name NAME, --no-service, --register, --paused, --window 22:00-07:00, --time-zone ZONE)" ;;
     esac
   done
   case "$(uname -s)" in Darwin | Linux) ;; *) die "this is the macOS and Linux setup (Windows: setup.ps1)" ;; esac
@@ -80,7 +84,7 @@ main() {
     done
     while :; do
       [ -n "$node_key" ] || node_key=$(ask_secret "Node key (backend NODE_API_KEY; used once, not saved)")
-      if GAB_NODE_KEY=$node_key "${cli[@]}" register --server "$server" --name "$name"; then break; fi
+      if GAB_NODE_KEY=$node_key "${cli[@]}" register --server "$server" --name "$name" ${reg_extra[@]+"${reg_extra[@]}"}; then break; fi
       echo "Registration failed (see above). Wrong key? Try again, or Ctrl+C." >&2
       node_key=""
     done
@@ -107,7 +111,8 @@ main() {
   "${cli[@]}" status || true
 
   printf '\n\033[32mDone. Next:\033[0m\n'
-  echo "  1. The node is paused: on purpose. Allow it from Claude Code (MCP): set_node_availability node=<this node's name> (always, or a nightly window)."
+  if [ "$paused" = 1 ]; then echo "  1. The node is paused, as asked: allow it from Claude Code (MCP): set_node_availability node=<this node's name>"
+  else echo "  1. The node is allowed to take tasks (see Registration above). Stop it: gab-node pause here, or set_node_availability from MCP"; fi
   echo "  2. Models: gab-node models list shows them; gab-node models pull --all downloads what is missing (see ARCHITECTURE.md)"
   echo "  3. Logs: $(data_dir)/logs   Status: gab-node status"
 }

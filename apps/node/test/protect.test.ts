@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NodeConfig } from '../src/config.js';
-import { allowedKinds, linuxOnBattery, parsePmset, parseVmStat } from '../src/health.js';
+import { allowedKinds, linuxOnBattery, parseOwnModelRss, parsePmset, parseVmStat } from '../src/health.js';
 import { applySetting } from '../src/settings.js';
 
 const config = () => NodeConfig.parse({ coordinatorUrl: 'http://127.0.0.1:1', name: 'test-node' });
@@ -30,6 +30,12 @@ describe('machine protection', () => {
     // available = 200000 pages * 16 KB = 3.05 GiB of 16 GiB -> 81% used
     expect(parseVmStat(out, 16 * 1024 ** 3)).toBe(81);
     expect(parseVmStat('garbage', 1)).toBeNull();
+  });
+
+  it('measures the memory of its own llama-server processes (paths with spaces), nothing else', () => {
+    const out = ' 63536704 /Users/z/Library/Application Support/gab-ai-node/llama.cpp/bin/llama-server\n  2048 /usr/bin/llama-server-helper\n 512000 /Applications/Safari.app/Contents/MacOS/Safari\n  1024 llama-server\n';
+    expect(parseOwnModelRss(out)).toBe((63536704 + 1024) * 1024);
+    expect(parseOwnModelRss('')).toBe(0);
   });
 
   it('settings validate their values', () => {

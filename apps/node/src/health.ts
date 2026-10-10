@@ -124,8 +124,37 @@ export function parseVmStat(out: string, totalBytes: number): number | null {
   return Math.max(0, Math.min(100, Math.round(100 * (1 - available / totalBytes))));
 }
 
-/** Memory use of the whole machine in percent. os.freemem() alone overstates use on macOS and Linux (caches count as used). */
+/** `ps -axo rss=,comm=` output: resident KB of the node's own llama-server processes, in bytes. */
+export function parseOwnModelRss(out: string): number {
+  let kb = 0;
+  for (const line of out.split('\n')) {
+    const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+    if (m && /(^|\/)llama-server$/.test(m[2]!)) kb += Number(m[1]);
+  }
+  return kb * 1024;
+}
+
+/** Memory held by the node's own model servers (a loaded model is the node's work, not another app's). */
+async function ownModelBytes(platform: typeof process.platform): Promise<number> {
+  if (platform !== 'darwin' && platform !== 'linux') return 0;
+  const r = await exec('ps', ['-axo', 'rss=,comm='], { timeoutMs: 5_000 });
+  if (r.code !== 0) { log.warn('ps failed; the loaded model counts as memory in use', { code: r.code }); return 0; }
+  return parseOwnModelRss(r.stdout);
+}
+
+/**
+ * Memory use of the machine in percent, not counting the node's own model servers: otherwise a
+ * loaded 120B model (kept between tasks) holds the node above the limit and it never claims again.
+ */
 export async function memoryPercent(platform = process.platform): Promise<number | null> {
+  const used = await machineMemoryPercent(platform);
+  if (used === null) return null;
+  const own = await ownModelBytes(platform).catch((err: unknown) => { log.warn('model memory check failed', { error: (err as Error).message }); return 0; });
+  return Math.max(0, Math.round(used - (100 * own) / os.totalmem()));
+}
+
+/** Memory use of the whole machine in percent. os.freemem() alone overstates use on macOS and Linux (caches count as used). */
+async function machineMemoryPercent(platform: typeof process.platform): Promise<number | null> {
   const total = os.totalmem();
   try {
     if (platform === 'darwin') {

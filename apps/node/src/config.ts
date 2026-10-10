@@ -82,6 +82,8 @@ export const NodeConfig = z.object({
   maxCpuPercent: z.number().int().min(10).max(100).default(80),
   maxMemoryPercent: z.number().int().min(10).max(100).default(80),
   maxConcurrent: z.number().int().min(1).max(32).default(1),
+  /** Start Docker when it is not running (macOS, Windows; Linux rootless only). Set with: gab-node settings docker-autostart on|off. */
+  dockerAutoStart: z.boolean().default(true),
   /** Memory the models may use together; default 75% of RAM (unified memory on Apple Silicon). */
   memoryBudgetMb: z.number().int().positive().default(Math.floor((os.totalmem() / 1024 / 1024) * 0.75)),
 });

@@ -9,7 +9,7 @@
 //   gab-node run                               the service (launchd / systemd / Task Scheduler)
 //   gab-node pause | resume                    stop/start taking new tasks on this machine
 //   gab-node status
-//   gab-node settings [battery on|off | max-cpu <n> | max-memory <n>]   machine protection
+//   gab-node settings [battery on|off | max-cpu <n> | max-memory <n> | docker-autostart on|off]   machine protection
 //   gab-node models list | pull <id...|--all> | verify <id> | remove <id> | test [id] | manage
 //   gab-node eval [--model <id>] [--runs <n>]  review the bundled canary repo and score the model
 import { readFileSync } from 'node:fs';

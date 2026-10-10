@@ -175,7 +175,8 @@ deep tasks run on `qwen3-coder-30b` (lower quality, accepted). A node with no mo
 - Agent loop: tool-calling over an OpenAI-compatible API; step and token budgets per task;
   every tool call logged as a task event.
 - Health before every claim (`health.ts`): only the kinds that can run now are claimed (Docker down: no
-  command kinds; llama-server missing or disk under `minFreeDiskMb`: nothing). macOS: `caffeinate` while a task runs. Hourly: log rotation, mirrors unused for
+  command kinds, and the node starts Docker itself, in the background and at most every 5 minutes: macOS `open -g -j -a Docker`,
+  Windows Docker Desktop, Linux `systemctl --user start docker` only; off with `gab-node settings docker-autostart off`; llama-server missing or disk under `minFreeDiskMb`: nothing). macOS: `caffeinate` while a task runs. Hourly: log rotation, mirrors unused for
   `mirrorMaxAgeDays` deleted. Files made by `setup:` are hidden from git in the task's worktree (never committed).
 - Model server: the node starts the pinned llama.cpp `llama-server` itself, one process per model, on demand,
   bound to `127.0.0.1`, and stops it after `idleMinutes` idle; idle models are unloaded to make room. The binary is

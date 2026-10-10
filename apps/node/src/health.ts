@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { TaskKind } from '@gab-ai-node/protocol';
 import type { NodeConfig } from './config.js';
+import { createDockerEnsurer, startDocker } from './docker.js';
 import { exec } from './exec.js';
 import { log } from './log.js';
 import { llamaServerBin } from './paths.js';
@@ -139,14 +140,15 @@ export async function memoryPercent(platform = process.platform): Promise<number
 export function createHealthCheck(config: NodeConfig, dir: string, ttlMs = 30_000): () => Promise<HealthState> {
   let cached: { at: number; state: HealthState } | null = null;
   let last = '';
+  const docker = createDockerEnsurer({ enabled: () => config.dockerAutoStart, isUp: dockerRunning, start: () => startDocker() });
   return async () => {
     if (cached && Date.now() - cached.at < ttlMs) return cached.state;
-    const [docker, model, disk, battery, cpu, mem] = await Promise.all([dockerRunning(), modelServerUp(), freeDiskMb(dir), onBattery(), cpuPercent(), memoryPercent()]);
-    const state: HealthState = { docker, model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem };
+    const [dockerUp, model, disk, battery, cpu, mem] = await Promise.all([docker(), modelServerUp(), freeDiskMb(dir), onBattery(), cpuPercent(), memoryPercent()]);
+    const state: HealthState = { docker: dockerUp, model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem };
     const busy = (cpu ?? 0) > config.maxCpuPercent || (mem ?? 0) > config.maxMemoryPercent;
-    const key = `${docker}|${model}|${disk !== null && disk < config.minFreeDiskMb}|${battery}|${busy}`;
+    const key = `${dockerUp}|${model}|${disk !== null && disk < config.minFreeDiskMb}|${battery}|${busy}`;
     if (key !== last) {
-      (docker && model && !busy ? log.info : log.warn)('health', { docker, modelServer: model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem });
+      (dockerUp && model && !busy ? log.info : log.warn)('health', { docker: dockerUp, modelServer: model, freeDiskMb: disk, onBattery: battery, cpuPercent: cpu, memoryPercent: mem });
       last = key;
     }
     cached = { at: Date.now(), state };
